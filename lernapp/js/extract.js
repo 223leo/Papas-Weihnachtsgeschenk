@@ -8,7 +8,7 @@ const PDFJS_WORKER = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf
 const JSZIP = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
 
 const CHUNK_CHARS = 9000; // ca. 2–3 Lektionen pro KI-Aufruf
-const MAX_SCAN_PAGES = 40;
+const MAX_PAGES = 200;
 
 const loaded = {};
 function loadScript(src) {
@@ -117,35 +117,57 @@ async function extractPdf(file, opts) {
     chars += text.trim().length;
     sections.push({ label: `Seite ${p}`, text });
   }
-  if (chars >= 80 * doc.numPages) return chunkSections(sections);
+  const scanned = chars < 80 * doc.numPages;
+  if (!opts.pageImages) {
+    if (!scanned) return chunkSections(sections);
+    throw new Error(`${file.name}: Das PDF ist eingescannt und kann hier nicht als Bild an die KI gegeben werden.`);
+  }
 
-  // Kaum Text gefunden -> eingescannt.
-  if (opts.renderScans) {
-    // Seiten als Bilder an die KI geben
-    const pages = Math.min(doc.numPages, MAX_SCAN_PAGES);
-    const images = [];
-    const labels = [];
-    for (let p = 1; p <= pages; p++) {
-      opts.onStatus(`${file.name}: Seite ${p} von ${pages} wird vorbereitet …`);
-      const page = await doc.getPage(p);
-      const base = page.getViewport({ scale: 1 });
-      const viewport = page.getViewport({ scale: Math.min(2.5, 1600 / Math.max(base.width, base.height)) });
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.round(viewport.width);
-      canvas.height = Math.round(viewport.height);
-      const ctx = canvas.getContext('2d');
-      ctx.fillStyle = '#fff';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      await page.render({ canvasContext: ctx, viewport }).promise;
-      images.push(await canvasToBlob(canvas));
-      labels.push(`Seite ${p}`);
-    }
-    return groupImages(images, labels, opts.maxImages);
+  // Seitenbilder mitschicken: Formeln, Diagramme und Notation bleiben so originalgetreu.
+  // Der automatisch gelesene Text dient nur als Hilfe (er verstümmelt Formeln oft).
+  const pages = Math.min(doc.numPages, MAX_PAGES);
+  const parts = [];
+  let group = [];
+  let groupChars = 0;
+  const flush = () => {
+    if (!group.length) return;
+    const first = group[0].label;
+    const last = group[group.length - 1].label;
+    const text = group.map((g) => (g.text.trim() ? `[${g.label}]\n${g.text.trim()}` : '')).filter(Boolean).join('\n\n');
+    parts.push({ label: first === last ? first : `${first} – ${last}`, pdfPages: group.map((g) => g.page), imageLabels: group.map((g) => g.label), text, scanned, doc });
+    group = [];
+    groupChars = 0;
+  };
+  for (let p = 1; p <= pages; p++) {
+    const sec = sections[p - 1];
+    const len = sec.text.trim().length;
+    if (group.length >= opts.maxImages || (group.length && groupChars + len > CHUNK_CHARS)) flush();
+    group.push({ page: p, label: sec.label, text: sec.text });
+    groupChars += len;
   }
-  if (file.size > 25 * 1024 * 1024) {
-    throw new Error(`${file.name}: Eingescanntes PDF ist zu groß (max. 25 MB). Bitte aufteilen.`);
+  flush();
+  // Bilder werden erst kurz vor dem KI-Aufruf erzeugt (spart Speicher)
+  for (const part of parts) part.loadImages = () => renderPages(part.doc, part.pdfPages);
+  return parts;
+}
+
+async function renderPages(doc, pageNumbers) {
+  const images = [];
+  for (const p of pageNumbers) {
+    const page = await doc.getPage(p);
+    const base = page.getViewport({ scale: 1 });
+    const viewport = page.getViewport({ scale: Math.min(3, 1800 / Math.max(base.width, base.height)) });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(viewport.width);
+    canvas.height = Math.round(viewport.height);
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: ctx, viewport }).promise;
+    images.push(await canvasToBlob(canvas));
+    canvas.width = canvas.height = 0;
   }
-  return [{ label: `${doc.numPages} Seiten (Scan)`, pdfFile: file, scanned: true }];
+  return images;
 }
 
 async function extractPptx(file) {
@@ -158,7 +180,7 @@ async function extractPptx(file) {
   for (const name of slideFiles) {
     const num = Number(name.match(/(\d+)\.xml$/)[1]);
     const xml = await zip.file(name).async('string');
-    const paras = xml.split(/<\/a:p>/).map((p) => [...p.matchAll(/<a:t>([\s\S]*?)<\/a:t>/g)].map((m) => decodeXml(m[1])).join(''));
+    const paras = xml.split(/<\/a:p>/).map((p) => [...p.matchAll(/<(?:a|m):t(?:\s[^>]*)?>([\s\S]*?)<\/(?:a|m):t>/g)].map((m) => decodeXml(m[1])).join(''));
     let text = paras.filter(Boolean).join('\n');
     const notes = zip.file(`ppt/notesSlides/notesSlide${num}.xml`);
     if (notes) {
@@ -180,7 +202,7 @@ async function extractDocx(file) {
   const xml = await doc.async('string');
   const paras = xml
     .split(/<\/w:p>/)
-    .map((p) => [...p.matchAll(/<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/g)].map((m) => decodeXml(m[1])).join(''))
+    .map((p) => [...p.matchAll(/<(?:w|m):t(?:\s[^>]*)?>([\s\S]*?)<\/(?:w|m):t>/g)].map((m) => decodeXml(m[1])).join(''))
     .filter((t) => t.trim());
   return chunkByParagraphs(paras);
 }
@@ -217,9 +239,9 @@ export function fileKind(file) {
 
 // Gibt eine Liste von Quellen zurück: {title, parts}
 // Bilder werden zu EINER Quelle zusammengefasst (z. B. alle Fotos einer Vorlesung).
-// opts: { onStatus, renderScans (Scans als Bilder statt als PDF), maxImages (Bilder pro KI-Aufruf) }
+// opts: { onStatus, pageImages (PDF-Seiten als Bilder mitschicken), maxImages (Bilder pro KI-Aufruf) }
 export async function extractFiles(files, opts = {}) {
-  const o = { onStatus: () => {}, renderScans: false, maxImages: 4, ...opts };
+  const o = { onStatus: () => {}, pageImages: true, maxImages: 4, ...opts };
   const sources = [];
   const images = [];
   for (const file of files) {

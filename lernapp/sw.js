@@ -1,5 +1,5 @@
 // Offline-Unterstützung: App-Dateien werden zwischengespeichert, damit du auch ohne Netz üben kannst.
-const CACHE = 'lernpfad-v1';
+const CACHE = 'lernpfad-v2';
 const SHELL = [
   './',
   'index.html',
@@ -11,6 +11,7 @@ const SHELL = [
   'js/extract.js',
   'js/ai.js',
   'js/demo.js',
+  'js/math.js',
   'manifest.webmanifest',
   'icon.svg',
 ];

@@ -4,6 +4,7 @@ import { XP, addXP, levelInfo, xpToday, currentStreak, streakAtRisk, weekXP, ACH
 import { extractFiles, fileKind } from './extract.js';
 import { initAI, aiMode, extractOptions, generateLessons, gradeFreeAnswer, testKey } from './ai.js';
 import { addDemoCourse } from './demo.js';
+import { startMath } from './math.js';
 
 const app = document.getElementById('app');
 
@@ -365,7 +366,7 @@ function renderPlay() {
           let cls = '';
           if (P.phase === 'feedback') cls = i === ex.correctIndex ? 'right' : i === P.selected ? 'wrong' : 'dim';
           else if (P.selected === i) cls = 'selected';
-          return `<button class="option ${cls}" data-action="pick" data-i="${i}" ${P.phase === 'feedback' ? 'disabled' : ''}><span class="key">${k + 1}</span>${esc(ex.options[i])}</button>`;
+          return `<button class="option ${cls}" data-action="pick" data-i="${i}" ${P.phase === 'feedback' ? 'disabled' : ''}><span class="key">${k + 1}</span><span class="opt-text">${esc(ex.options[i])}</span></button>`;
         })
         .join('')}</div>`;
   } else if (ex.type === 'cloze') {
@@ -1300,6 +1301,7 @@ onStorageError((msg) => toast(msg, 'bad'));
 (async function init() {
   await Promise.all([loadState(), initAI()]);
   route();
+  startMath();
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }

@@ -360,6 +360,14 @@ h2 { font-size: 1.15rem; font-weight: 800; margin: 0 0 0.6rem; }
 .ex-answer { color: var(--ok-text); font-weight: 700; }
 .ex-actions { display: flex; gap: 8px; margin-top: 4px; }
 
+/* ---------- Formeln ---------- */
+mjx-container { font-size: 108% !important; }
+mjx-container[display='true'] { display: block; overflow-x: auto; overflow-y: hidden; max-width: 100%; margin: 0.4em 0 !important; padding: 2px 0; }
+.option mjx-container, .cloze mjx-container { vertical-align: middle; }
+.opt-text { flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; }
+.prompt, .fb-answer, .fb-expl, .fc-front, .fc-back, .ex-prompt { overflow-wrap: anywhere; }
+.prompt mjx-container:not([display='true']), .fc-front mjx-container { max-width: 100%; }
+
 /* ---------- Toast ---------- */
 .toast {
   position: fixed; left: 50%; bottom: calc(96px + env(safe-area-inset-bottom)); transform: translate(-50%, 20px);

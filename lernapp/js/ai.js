@@ -32,9 +32,9 @@ export function aiMode() {
 export function extractOptions() {
   if (aiMode() === 'claude') {
     const max = sampleLimits && sampleLimits.images ? sampleLimits.images.maxCount : 0;
-    return { renderScans: true, maxImages: Math.max(1, Math.min(max || 1, 8)), imagesAllowed: !!max };
+    return { pageImages: !!max, maxImages: Math.max(1, Math.min(max || 1, 5)) };
   }
-  return { renderScans: false, maxImages: 4, imagesAllowed: true };
+  return { pageImages: true, maxImages: 5 };
 }
 
 const SAMPLE_ERRORS = {
@@ -199,7 +199,16 @@ Regeln:
 - Verwende nur Inhalte aus dem Material. Erfinde keine Fakten.
 - Ignoriere Organisatorisches (Termine, Raumangaben, Namen von Dozierenden, Literaturlisten, Gliederungsfolien).
 - Schreibe in der Sprache des Materials (meist Deutsch). Fachbegriffe wie im Material.
-- Formeln als einfacher Text (z. B. a^2 + b^2 = c^2).`;
+- Übernimm alles materialgetreu: dieselben Bezeichnungen, Variablennamen, Indizes, Symbole und Schreibweisen wie im Material. Ändere keine Notation.
+
+Mathematik (sehr wichtig):
+- Schreibe JEDE mathematische Notation in LaTeX, in allen Feldern (title, summary, prompt, options, answer, alternatives, explanation): inline als \\( … \\), abgesetzte Formeln als \\[ … \\].
+- Beispiele: \\(a_n\\), \\(x^{2}\\), \\(\\frac{1}{n}\\), \\(\\sum_{k=1}^{n} k\\), \\(\\lim_{n \\to \\infty} a_n = a\\), \\(\\forall \\varepsilon > 0\\ \\exists N \\in \\mathbb{N}\\), \\(|a_n - a| < \\varepsilon\\), \\(f\\colon \\mathbb{R} \\to \\mathbb{R}\\).
+- Auch einzelne Variablen im Satz sind Mathematik: „die Folge \\((a_n)_{n \\in \\mathbb{N}}\\)“, nicht „die Folge a_n“. Schreibe nie a_n, x^2, sqrt(x) oder ähnliches als normalen Text.
+- Verwende keine $-Zeichen als Formel-Begrenzer.
+- Wenn Seitenbilder mitgeschickt werden, sind sie maßgeblich: Der automatisch gelesene Text kann Formeln verstümmeln (fehlende Indizes, Brüche, Symbole). Lies Formeln immer aus den Bildern ab.
+- Lückentext ("cloze"): Die Lücke ist immer ein Wort oder Fachbegriff, nie eine Formel. Formeln abfragen geht mit "mc" oder "flashcard".
+- Im JSON müssen Backslashes verdoppelt werden (z. B. "\\\\frac{1}{n}").`;
 
 const JSON_FORMAT = `Antworte ausschließlich mit einem JSON-Objekt in genau dieser Form, ohne weiteren Text:
 {"unitTitle": "…", "lessons": [{"title": "…", "summary": "…", "exercises": [
@@ -243,12 +252,14 @@ function cleanResult(data) {
 function partIntro(part, courseName) {
   let t = `Kurs: ${courseName}\nAbschnitt: ${part.label}\n\n`;
   if (part.scanned) t += 'Das Material ist gescannt oder fotografiert; lies auch Handschrift und Tafelbilder sorgfältig.\n\n';
+  if (part.pdfPages) t += 'Die Bilder zeigen die Originalseiten. Der Text unter MATERIAL wurde automatisch aus dem PDF gelesen und kann Formeln verstümmeln; maßgeblich sind die Bilder.\n\n';
   if (part.imageLabels) t += `Die Bilder sind der Reihe nach: ${part.imageLabels.join(', ')}. Nutze diese Namen als Fundstelle.\n\n`;
   return t;
 }
 
 export async function generateLessons(part, courseName, signal) {
   const mode = aiMode();
+  if (part.loadImages && !part.images) part.images = await part.loadImages();
   if (mode === 'claude') {
     const prompt = `${GENERATE_RULES}\n\n${JSON_FORMAT}\n\n${partIntro(part, courseName)}${part.text ? `MATERIAL:\n${part.text}\n\n` : ''}Erstelle jetzt aus diesem Material die Lektionen als JSON.`;
     const opts = { modelTier: 'default' };
