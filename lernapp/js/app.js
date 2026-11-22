@@ -806,7 +806,7 @@ async function processUpload(courseId, files) {
         log.push({ kind: 'ok', text: `✓ ${esc(src.title)} · ${esc(part.label)}: ${res.lessons.length} Lektion${res.lessons.length === 1 ? '' : 'en'}` });
         saveNow();
       } catch (err) {
-        log.push({ kind: 'err', text: `⚠️ ${esc(src.title)} · ${esc(part.label)}: ${esc(err.message)}` });
+        log.push({ kind: 'err', text: `⚠️ ${esc(src.title)} · ${esc(part.label)}: ${esc(err.message)}${err.name === 'TypeError' ? ' [Code: js]' : ''}` });
         if (err.fatal) break outer;
       }
     }

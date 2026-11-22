@@ -214,7 +214,8 @@ export async function loadState() {
     try {
       const snap = await withTimeout(remote.coll.limit(1000).get(), 12000);
       const docs = {};
-      for (const d of snap.docs) docs[d.id] = d.data();
+      // Die Plattform liefert schreibgeschützte Objekte: tief kopieren, damit die App sie ändern kann
+      for (const d of snap.docs) docs[d.id] = JSON.parse(JSON.stringify(d.data() || {}));
       if (docs.state) {
         const lessons = [];
         for (const [id, v] of Object.entries(docs)) {

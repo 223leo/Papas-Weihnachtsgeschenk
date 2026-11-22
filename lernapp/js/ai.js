@@ -251,13 +251,16 @@ export async function generateLessons(part, courseName, signal) {
   const mode = aiMode();
   if (mode === 'claude') {
     const prompt = `${GENERATE_RULES}\n\n${JSON_FORMAT}\n\n${partIntro(part, courseName)}${part.text ? `MATERIAL:\n${part.text}\n\n` : ''}Erstelle jetzt aus diesem Material die Lektionen als JSON.`;
-    const opts = { modelTier: 'default', signal };
-    if (part.images && part.images.length) opts.images = part.images;
+    const opts = { modelTier: 'default' };
+    if (signal) opts.signal = signal;
+    if (part.images && part.images.length) opts.images = [...part.images];
+    let data;
     try {
-      return cleanResult(await sample.json(prompt, opts));
+      data = await sample.json(prompt, opts);
     } catch (e) {
       throw sampleError(e);
     }
+    return cleanResult(JSON.parse(JSON.stringify(data)));
   }
   if (mode === 'api') {
     const content = [];
@@ -307,6 +310,7 @@ export async function gradeFreeAnswer(ex, userAnswer) {
     } catch (e) {
       throw sampleError(e);
     }
+    g = JSON.parse(JSON.stringify(g));
   } else {
     g = await apiJSON({ system: GRADE_RULES, content: task, schema: GRADE_SCHEMA, effort: 'low', maxTokens: 4000 });
   }
