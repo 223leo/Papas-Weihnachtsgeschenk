@@ -1,8 +1,8 @@
-import { state, loadState, save, saveNow, replaceState, resetState, uid, dayKey, courseLessons, COURSE_COLORS, MODELS, onStorageError, storageMode } from './store.js';
+import { state, loadState, save, saveNow, replaceState, resetState, uid, dayKey, courseLessons, COURSE_COLORS, MODELS, onStorageError, storageMode, daysBetween, addDays, initAssets, savePageImage, pageImageUrl, deletePageImages } from './store.js';
 import { recordAnswer, dueExercises, dueCount, weakestExercises } from './srs.js';
 import { XP, addXP, levelInfo, xpToday, currentStreak, streakAtRisk, weekXP, ACHIEVEMENTS, checkAchievements } from './gamification.js';
 import { extractFiles, fileKind } from './extract.js';
-import { initAI, aiMode, extractOptions, generateLessons, generateMoreLessons, gradeFreeAnswer, testKey } from './ai.js';
+import { initAI, aiMode, extractOptions, generateLessons, generateMoreLessons, generateWeaknessTraining, gradeFreeAnswer, testKey } from './ai.js';
 import { addDemoCourse } from './demo.js';
 import { startMath } from './math.js';
 
@@ -129,6 +129,148 @@ function nextLesson() {
   return null;
 }
 
+// ---------- Klausurmodus ----------
+
+const WEEKDAYS = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
+function formatDay(key) {
+  const [y, m, d] = key.split('-').map(Number);
+  const date = new Date(y, m - 1, d);
+  return `${WEEKDAYS[date.getDay()]}, ${d}.${m}.${y}`;
+}
+
+// Verteilt die offenen Lektionen auf die Tage bis zur Klausur.
+// Die letzten ~20 % der Tage (mind. 1, wenn genug Zeit) sind nur fürs Wiederholen.
+function examPlan(c) {
+  if (!c || !c.examDate) return null;
+  const today = dayKey();
+  const days = daysBetween(today, c.examDate); // 0 = heute ist Klausur
+  if (days < 0) return { past: true, days };
+  const list = courseLessons(c.id).filter((l) => l.exercises.length);
+  const open = list.filter((l) => !l.completedAt);
+  const doneToday = list.filter((l) => l.completedAt && dayKey(new Date(l.completedAt)) === today).length;
+  const reviewDays = days >= 5 ? Math.max(1, Math.round(days * 0.2)) : days >= 2 ? 1 : 0;
+  const learnDays = Math.max(1, days - reviewDays);
+  const perDay = open.length ? Math.ceil((open.length + doneToday) / learnDays) : 0;
+  const todayLeft = open.length ? Math.max(0, Math.min(open.length, perDay - doneToday)) : 0;
+  const phase = days === 0 ? 'today' : !open.length ? 'review' : days <= reviewDays ? 'late' : 'learn';
+  return { days, total: list.length, open: open.length, doneToday, perDay, todayLeft, reviewDays, learnDays, phase, reviewFrom: addDays(c.examDate, -reviewDays) };
+}
+
+function examCard(c) {
+  const plan = examPlan(c);
+  if (!plan || plan.past) return '';
+  const next = lessonStatus(c.id).find((s) => s.state === 'current');
+  const dueHere = dueExercises().filter((d) => d.lesson.courseId === c.id).length;
+  let line;
+  let action = '';
+  if (plan.phase === 'today') {
+    line = 'Heute ist die Klausur. Viel Erfolg! 🍀';
+    if (dueHere) action = `<button class="btn secondary" data-action="review-course" data-id="${c.id}">Kurz aufwärmen</button>`;
+  } else if (plan.phase === 'learn') {
+    line = plan.todayLeft
+      ? `Heute dran: <b>${plan.todayLeft} Lektion${plan.todayLeft === 1 ? '' : 'en'}</b>${plan.doneToday ? ` (${plan.doneToday} schon geschafft)` : ''}`
+      : `Tagespensum geschafft! ✅ ${plan.doneToday} Lektion${plan.doneToday === 1 ? '' : 'en'} heute.`;
+    if (plan.todayLeft && next) action = `<button class="btn primary" data-action="start" data-id="${next.lesson.id}">Weiterlernen</button>`;
+    else if (dueHere) action = `<button class="btn secondary" data-action="review-course" data-id="${c.id}">Wiederholen</button>`;
+  } else {
+    line = plan.open
+      ? `Endspurt: noch ${plan.open} Lektion${plan.open === 1 ? '' : 'en'} offen. Mach sie heute und wiederhole dann.`
+      : 'Alle Lektionen geschafft. Jetzt heißt es wiederholen. 💪';
+    if (plan.open && next) action = `<button class="btn primary" data-action="start" data-id="${next.lesson.id}">Weiterlernen</button>`;
+    else action = `<button class="btn secondary" data-action="review-course" data-id="${c.id}">Wiederholen${dueHere ? ` (${dueHere})` : ''}</button>`;
+  }
+  const pct = plan.total ? Math.round(((plan.total - plan.open) / plan.total) * 100) : 0;
+  return `<section class="card exam-card" style="--accent:${c.color}">
+    <div class="exam-head">
+      <div class="exam-days"><b>${plan.days}</b><span>${plan.days === 1 ? 'Tag' : 'Tage'}</span></div>
+      <div class="grow">
+        <div class="small muted">📅 Klausur ${esc(c.name)} · ${formatDay(c.examDate)}</div>
+        <div>${line}</div>
+        <div class="bar"><div style="width:${pct}%"></div></div>
+        <div class="small muted">${plan.total - plan.open} von ${plan.total} Lektionen${plan.phase === 'learn' && plan.reviewDays ? ` · ab ${formatDay(plan.reviewFrom)} nur noch Wiederholung` : ''}</div>
+      </div>
+    </div>
+    ${action ? `<div class="exam-action">${action}</div>` : ''}
+  </section>`;
+}
+
+function examSheet(courseId) {
+  const c = course(courseId);
+  const el = sheet(`<h2>📅 Klausurdatum für „${esc(c.name)}“</h2>
+    <p class="small muted">Lernio verteilt deine offenen Lektionen auf die Tage bis dahin, zeigt dir jeden Tag dein Pensum und plant die letzten Tage zum Wiederholen ein. Jede Aufgabe kommt vor der Klausur mindestens noch einmal dran.</p>
+    <form class="form" id="exam-form">
+      <label>Datum <input type="date" id="exam-date" name="date" min="${addDays(dayKey(), 1)}" value="${esc(c.examDate || '')}" required></label>
+      <button class="btn primary big" type="submit">Speichern</button>
+      ${c.examDate ? `<button class="btn danger" type="button" data-action="exam-clear" data-id="${c.id}">Klausurdatum entfernen</button>` : ''}
+    </form>`);
+  el.querySelector('#exam-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const v = el.querySelector('#exam-date').value;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(v) || v <= dayKey()) return toast('Bitte ein Datum in der Zukunft wählen.');
+    c.examDate = v;
+    save();
+    closeSheet();
+    toast('📅 Klausurplan erstellt', 'good');
+    route();
+  });
+}
+
+// ---------- Originalseiten ----------
+
+function unitOfExercise(ex) {
+  const l = state.lessons.find((x) => x.exercises.includes(ex) || x.exercises.some((e) => e.id === ex.id));
+  return l ? state.units.find((u) => u.id === l.unitId) : null;
+}
+
+// "Seite 4", "Seiten 4–5", "S. 4", "Bild 2" -> Schlüssel der gespeicherten Seite
+function pageLabelFor(u, sourceText) {
+  if (!u || !u.pages || !sourceText) return null;
+  const m = String(sourceText).match(/\b(Seiten?|S\.|Bild(?:er)?)\s*(\d+)/i);
+  if (!m) return null;
+  const label = (/^bild/i.test(m[1]) ? 'Bild ' : 'Seite ') + m[2];
+  return u.pages[label] ? label : null;
+}
+
+function sourceHtml(ex, plain = false) {
+  if (!ex.source) return '';
+  const u = unitOfExercise(ex);
+  const label = pageLabelFor(u, ex.source);
+  if (!label) return plain ? ` · ${esc(ex.source)}` : `<div class="source">📍 ${esc(ex.source)}</div>`;
+  const btn = `<button class="source-link" data-action="show-page" data-unit="${u.id}" data-label="${esc(label)}">📍 ${esc(ex.source)} · Seite ansehen</button>`;
+  return plain ? ` · ${btn}` : `<div>${btn}</div>`;
+}
+
+function pageOrder(u) {
+  const num = (k) => Number(k.replace(/\D+/g, '')) || 0;
+  const kind = (k) => k.replace(/\d+/g, '').trim();
+  return Object.keys(u.pages || {}).sort((a, b) => kind(a).localeCompare(kind(b)) || num(a) - num(b));
+}
+
+async function showPage(unitId, label) {
+  const u = state.units.find((x) => x.id === unitId);
+  if (!u || !u.pages || !u.pages[label]) return toast('Diese Seite ist nicht gespeichert.');
+  const order = pageOrder(u);
+  const i = order.indexOf(label);
+  const prev = order[i - 1];
+  const next = order[i + 1];
+  const el = sheet(`<div class="page-head"><h2>${esc(label)}</h2><span class="small muted">${esc(u.title)}</span></div>
+    <div class="page-frame"><div class="spinner"></div></div>
+    <div class="two">
+      <button class="btn secondary" data-action="show-page" data-unit="${u.id}" data-label="${esc(prev || '')}" ${prev ? '' : 'disabled'}>← ${esc(prev || '')}</button>
+      <button class="btn secondary" data-action="show-page" data-unit="${u.id}" data-label="${esc(next || '')}" ${next ? '' : 'disabled'}>${esc(next || '')} →</button>
+    </div>
+    <button class="btn ghost full" data-action="close-sheet">Schließen</button>`);
+  el.classList.add('page-sheet');
+  const url = await pageImageUrl(u.pages[label]);
+  const frame = el.querySelector('.page-frame');
+  if (!frame) return;
+  frame.innerHTML = url
+    ? `<img src="${esc(url)}" alt="${esc(label)} aus ${esc(u.title)}" class="page-img">`
+    : '<p class="muted">Die Seite konnte nicht geladen werden. Auf einem anderen Gerät sind nur Seiten verfügbar, die über claude.ai gespeichert wurden.</p>';
+  const img = frame.querySelector('img');
+  if (img) img.addEventListener('error', () => (frame.innerHTML = '<p class="muted">Die Seite konnte nicht geladen werden.</p>'));
+}
+
 // ---------- Rahmen: Kopfzeile + Navigation ----------
 
 function topbar() {
@@ -193,7 +335,11 @@ function renderHome() {
     </div>
   </section>`;
 
-  if (next) {
+  for (const c of state.courses) body += examCard(c);
+  const nextPlan = next && examPlan(course(next.courseId));
+  const shownInExam = nextPlan && !nextPlan.past && nextPlan.todayLeft > 0;
+
+  if (next && !shownInExam) {
     const c = course(next.courseId);
     body += `<section class="card continue" style="--accent:${c.color}">
       <div class="muted small">Weiterlernen · ${esc(c.name)}</div>
@@ -252,7 +398,8 @@ function renderCourse(courseId) {
 
   let body = `<div class="course-head" style="--accent:${c.color}">
     <a href="#/" class="back" aria-label="Zurück">←</a>
-    <div class="grow"><h1>${esc(c.name)}</h1><div class="muted">${p.done} von ${p.total} Lektionen · ${p.pct}%</div></div>
+    <div class="grow"><h1>${esc(c.name)}</h1><div class="muted">${p.done} von ${p.total} Lektionen · ${p.pct}%</div>
+      ${c.examDate && examPlan(c) && !examPlan(c).past ? `<button class="exam-chip" data-action="exam" data-id="${c.id}">📅 Klausur in ${examPlan(c).days} ${examPlan(c).days === 1 ? 'Tag' : 'Tagen'}</button>` : `<button class="exam-chip ghost" data-action="exam" data-id="${c.id}">📅 Klausurdatum festlegen</button>`}</div>
     <button class="btn icon" data-action="course-menu" data-id="${c.id}" aria-label="Kursoptionen">⋯</button>
   </div>`;
 
@@ -281,6 +428,8 @@ function renderCourse(courseId) {
   if (!units.length) body += `<section class="card empty"><p>Dieser Kurs hat noch keine Abschnitte.</p></section>`;
   body += `<a class="btn ghost full" href="#/upload/${c.id}">➕ Weitere Vorlesung zu diesem Kurs hinzufügen</a>
   <button class="btn ghost full" data-action="new-unit" data-id="${c.id}">✎ Eigenen Abschnitt ohne Datei anlegen</button>`;
+  const plan = examPlan(c);
+  if (plan && !plan.past) body = body.replace('<section class="unit"', examCard(c) + '<section class="unit"');
   page('learn', body);
 }
 
@@ -308,6 +457,7 @@ function courseMenu(courseId) {
     <h2>${esc(c.name)}</h2>
     <button class="btn secondary full" data-action="rename-course" data-id="${c.id}">Umbenennen</button>
     <a class="btn secondary full" href="#/upload/${c.id}" data-action="close-sheet">Vorlesung hinzufügen</a>
+    <button class="btn secondary full" data-action="exam" data-id="${c.id}">📅 Klausurdatum ${c.examDate ? 'ändern' : 'festlegen'}</button>
     <button class="btn secondary full" data-action="new-unit" data-id="${c.id}">Eigenen Abschnitt anlegen</button>
     <button class="btn danger full" data-action="delete-course" data-id="${c.id}">Kurs löschen</button>
   `);
@@ -443,7 +593,7 @@ function renderPlay() {
     inner = `<div class="q-type">${item.attempts && P.phase === 'answer' ? '🔁 Nochmal' : 'Karteikarte: Weißt du es?'}</div>
       <div class="flashcard ${flipped ? 'flipped' : ''}" data-action="flip">
         <div class="fc-front">${esc(ex.prompt)}</div>
-        ${flipped ? `<div class="fc-back">${esc(ex.answer)}${ex.source ? `<div class="source">📍 ${esc(ex.source)}</div>` : ''}</div>` : '<div class="muted small">Erst überlegen, dann antippen zum Umdrehen</div>'}
+        ${flipped ? `<div class="fc-back">${esc(ex.answer)}${sourceHtml(ex)}</div>` : '<div class="muted small">Erst überlegen, dann antippen zum Umdrehen</div>'}
       </div>`;
   } else if (ex.type === 'free') {
     inner = `<div class="q-type">${item.attempts && P.phase === 'answer' ? '🔁 Nochmal versuchen' : 'Erkläre in eigenen Worten'}</div>
@@ -484,7 +634,7 @@ function playerFooter(ex) {
       ${r.feedback ? `<div class="fb-text">${esc(r.feedback)}</div>` : ''}
       ${r.missing && r.missing.length ? `<ul class="fb-missing">${r.missing.map((m) => `<li>${esc(m)}</li>`).join('')}</ul>` : ''}
       ${ex.explanation ? `<div class="fb-expl">💡 ${esc(ex.explanation)}</div>` : ''}
-      ${ex.source ? `<div class="source">📍 ${esc(ex.source)}</div>` : ''}
+      ${sourceHtml(ex)}
       ${!r.correct && r.willRepeat ? `<div class="small">Diese Aufgabe kommt am Ende der Lektion nochmal.</div>` : ''}
       <button class="btn ${r.correct ? 'primary' : 'warn'} big" data-action="next" autofocus>Weiter</button>
     </footer>`;
@@ -637,7 +787,11 @@ function finishLesson() {
   const perfect = firstOk === ids.length;
   const secs = Math.round((Date.now() - P.startedAt) / 1000);
 
-  for (const id of ids) recordAnswer(id, P.firstTry[id]);
+  for (const id of ids) {
+    const l = state.lessons.find((x) => x.exercises.some((e) => e.id === id));
+    const c = l && course(l.courseId);
+    recordAnswer(id, P.firstTry[id], c && c.examDate ? c.examDate : null);
+  }
 
   let xp;
   if (P.mode === 'lesson') {
@@ -714,6 +868,8 @@ function renderReview() {
       <p class="muted small">Aufgaben, die du schon mal falsch hattest.</p>
       <ul class="weak-list">${weak.slice(0, 5).map((w) => `<li>${esc(w.ex.prompt)}</li>`).join('')}</ul>
       <button class="btn secondary full" data-action="review-weak">Stolpersteine üben</button>
+      ${aiMode() ? `<button class="btn primary full" data-action="weak-training">✨ Neue Übungen zu meinen Schwächen</button>
+      <p class="small muted">Claude erstellt eine Lektion, die genau diese Inhalte anders abfragt, damit du sie wirklich verstehst und nicht nur die alte Antwort wiedererkennst.</p>` : ''}
     </section>`;
   }
   body += `<section class="card info">
@@ -721,6 +877,53 @@ function renderReview() {
     <p class="muted small">Die App nutzt <i>Spaced Repetition</i>: Richtig beantwortete Aufgaben kommen nach 1, 3, 7, 16 … Tagen wieder. Falsche kommen schon morgen wieder. So wiederholst du genau dann, kurz bevor du es vergessen würdest.</p>
   </section>`;
   page('review', body);
+}
+
+// ---------- Schwächen-Training ----------
+
+function weakByCourse() {
+  const groups = {};
+  for (const w of weakestExercises(200)) {
+    if (!w.card.lapses || !w.lesson) continue;
+    (groups[w.lesson.courseId] ||= []).push(w);
+  }
+  return groups;
+}
+
+function weakTrainingSheet() {
+  const groups = weakByCourse();
+  const ids = Object.keys(groups).filter((id) => course(id));
+  if (!ids.length) return toast('Du hast noch keine Stolpersteine. Super!');
+  if (ids.length === 1) return weakTraining(ids[0]);
+  sheet(`<h2>✨ Für welchen Kurs?</h2>
+    ${ids.map((id) => `<button class="btn secondary full" data-action="weak-training-course" data-id="${id}">${esc(course(id).name)} · ${groups[id].length} Stolperstein${groups[id].length === 1 ? '' : 'e'}</button>`).join('')}`);
+}
+
+async function weakTraining(courseId) {
+  const c = course(courseId);
+  const weak = (weakByCourse()[courseId] || []).slice(0, 12);
+  if (!weak.length) return;
+  const el = sheet(`<h2>✨ Schwächen-Training</h2><div class="spinner"></div>
+    <p class="muted">Claude erstellt neue Übungen zu ${weak.length} Stolperstein${weak.length === 1 ? '' : 'en'} in „${esc(c.name)}“. Das dauert etwa 20–60 Sekunden.</p>`);
+  try {
+    const res = await generateWeaknessTraining(weak, c.name);
+    if (!res.lessons.length) throw new Error('Claude hat keine passenden Übungen erstellt. Versuch es nochmal.');
+    let u = state.units.find((x) => x.courseId === courseId && x.kind === 'training');
+    if (!u) {
+      u = { id: uid(), courseId, title: '🎯 Schwächen-Training', sourceName: 'Von Claude zu deinen Stolpersteinen', kind: 'training', createdAt: Date.now() };
+      state.units.push(u);
+    }
+    const order = Math.max(-1, ...state.lessons.filter((l) => l.unitId === u.id).map((l) => l.order)) + 1;
+    const L = res.lessons[0];
+    const l = { id: uid(), unitId: u.id, courseId, order, title: L.title || 'Training', summary: L.summary || 'Gezielte Übungen zu deinen Stolpersteinen.', exercises: L.exercises, completedAt: null, bestAccuracy: null, plays: 0 };
+    state.lessons.push(l);
+    await saveNow();
+    closeSheet();
+    startLesson(l.id);
+  } catch (err) {
+    if (el.isConnected) el.innerHTML = `<h2>⚠️ Das hat nicht geklappt</h2><p>${esc(err.message)}</p><button class="btn secondary big" data-action="close-sheet">Schließen</button>`;
+    else toast(err.message, 'bad');
+  }
 }
 
 // ---------- Hochladen ----------
@@ -853,7 +1056,7 @@ async function processUpload(courseId, files) {
   }
 
   outer: for (const src of sources) {
-    const unit = { id: uid(), courseId, title: src.title, sourceName: src.title, createdAt: Date.now() };
+    const unit = { id: uid(), courseId, title: src.title, sourceName: src.title, createdAt: Date.now(), pages: {} };
     let order = 0;
     let unitAdded = false;
     for (const [i, part] of src.parts.entries()) {
@@ -870,6 +1073,17 @@ async function processUpload(courseId, files) {
           created++;
         }
         if (part.text) state.sources[unit.id] = ((state.sources[unit.id] || '') + '\n\n' + part.text).slice(0, 400000);
+        if (part.images && part.imageLabels) {
+          render(`${src.title}: Seiten werden gespeichert …`);
+          for (const [k, img] of part.images.entries()) {
+            try {
+              unit.pages[part.imageLabels[k]] = await savePageImage(unit.id, part.imageLabels[k], img);
+            } catch {
+              // Seite fehlt dann nur in der Ansicht
+            }
+          }
+          part.images = null; // Speicher freigeben
+        }
         log.push({ kind: 'ok', text: `✓ ${esc(src.title)} · ${esc(part.label)}: ${res.lessons.length} Lektion${res.lessons.length === 1 ? '' : 'en'}` });
         saveNow();
       } catch (err) {
@@ -1006,7 +1220,7 @@ function renderSettings() {
     ${state.courses.some((c) => c.demo) ? '' : `<button class="btn ghost" data-action="demo">Demo-Kurs hinzufügen</button>`}
     <button class="btn danger" data-action="reset">Alle Daten löschen</button>
   </section>
-  <p class="center small muted">Lernio · Version 1.2</p>`;
+  <p class="center small muted">Lernio · Version 1.3</p>`;
   page('settings', body);
 
   document.getElementById('settings-form').addEventListener('change', (e) => {
@@ -1084,7 +1298,7 @@ function renderEdit(lessonId) {
   ${l.exercises
     .map(
       (ex, i) => `<section class="card ex-card">
-      <div class="small muted">${i + 1}. ${TYPE_LABEL[ex.type]}${ex.source ? ` · ${esc(ex.source)}` : ''}</div>
+      <div class="small muted">${i + 1}. ${TYPE_LABEL[ex.type]}${sourceHtml(ex, true)}</div>
       <div class="ex-prompt">${esc(ex.prompt)}</div>
       ${
         ex.type === 'mc'
@@ -1199,6 +1413,10 @@ document.addEventListener('click', async (e) => {
       const exIds = state.lessons.filter((l) => l.courseId === id).flatMap((l) => l.exercises.map((x) => x.id));
       exIds.forEach((x) => delete state.srs[x]);
       state.lessons = state.lessons.filter((l) => l.courseId !== id);
+      state.units.filter((u) => u.courseId === id).forEach((u) => {
+        deletePageImages(u);
+        delete state.sources[u.id];
+      });
       state.units = state.units.filter((u) => u.courseId !== id);
       state.courses = state.courses.filter((x) => x.id !== id);
       saveNow();
@@ -1253,6 +1471,7 @@ document.addEventListener('click', async (e) => {
       if (!(await askConfirm(`Abschnitt „${u.title}“ mit ${n} Lektion${n === 1 ? '' : 'en'} löschen? Deine XP bleiben erhalten.`, 'Löschen'))) return;
       unitLessons(id).forEach((l) => l.exercises.forEach((x) => delete state.srs[x.id]));
       state.lessons = state.lessons.filter((l) => l.unitId !== id);
+      deletePageImages(u);
       state.units = state.units.filter((x) => x.id !== id);
       delete state.sources[id];
       await saveNow();
@@ -1299,6 +1518,33 @@ document.addEventListener('click', async (e) => {
     }
     case 'more-lessons':
       moreLessons(id);
+      break;
+    case 'exam':
+      examSheet(id);
+      break;
+    case 'exam-clear': {
+      const c = course(id);
+      delete c.examDate;
+      save();
+      closeSheet();
+      toast('Klausurdatum entfernt');
+      route();
+      break;
+    }
+    case 'review-course': {
+      const items = dueExercises(15).filter((d) => d.lesson.courseId === id);
+      const fallback = weakestExercises(30).filter((w) => w.lesson && w.lesson.courseId === id).slice(0, 10);
+      startReview(items.length ? items : fallback, items.length ? `Wiederholung: ${course(id).name}` : `Stolpersteine: ${course(id).name}`);
+      break;
+    }
+    case 'show-page':
+      if (el.dataset.label) showPage(el.dataset.unit, el.dataset.label);
+      break;
+    case 'weak-training':
+      weakTrainingSheet();
+      break;
+    case 'weak-training-course':
+      weakTraining(id);
       break;
     case 'delete-ex': {
       const l = lesson(el.dataset.lesson);
@@ -1468,7 +1714,7 @@ window.addEventListener('hashchange', () => {
 onStorageError((msg) => toast(msg, 'bad'));
 
 (async function init() {
-  await Promise.all([loadState(), initAI()]);
+  await Promise.all([loadState(), initAI(), initAssets()]);
   route();
   startMath();
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {

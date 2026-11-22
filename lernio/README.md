@@ -19,6 +19,16 @@ Lade deine Vorlesungsunterlagen hoch, und eine KI macht daraus kurze Lektionen i
 - Serienschutz: Alle 7 Tage am Stück bekommst du einen (höchstens 2). Er rettet deine Serie, wenn du einen Tag verpasst.
 - Wochenübersicht, Erfolge und eine „Wochenliga“ gegen deine eigenen XP der Vorwoche.
 
+**Klausurmodus**
+- Im Kurs auf „📅 Klausurdatum festlegen“ tippen. Lernio verteilt die offenen Lektionen auf die Tage bis zur Klausur und zeigt auf der Startseite dein Tagespensum.
+- Die letzten Tage (etwa 20 %) sind fürs Wiederholen reserviert, und jede Aufgabe kommt vor der Klausur mindestens noch einmal dran.
+
+**Originalseite ansehen**
+- Bei Aufgaben aus PDFs und Fotos ist die Fundstelle („📍 Seite 4“) antippbar und zeigt die Originalseite aus deinem Skript, mit Blättern zur vorherigen und nächsten Seite.
+
+**Schwächen-Training mit KI**
+- Unter „Wiederholen“ → „✨ Neue Übungen zu meinen Schwächen“: Claude erstellt eine Lektion, die deine Stolpersteine anders abfragt. Sie landet im Abschnitt „🎯 Schwächen-Training“.
+
 **Eigenes Material verwalten**
 - Kurs („⋯“ oben rechts): umbenennen, Vorlesung hinzufügen, eigenen Abschnitt anlegen, löschen.
 - Abschnitt („⋯“ im Abschnitts-Banner): mehr Lektionen von Claude erstellen lassen (ohne neuen Upload), eigene Lektion anlegen, umbenennen, in einen anderen Kurs verschieben, löschen.

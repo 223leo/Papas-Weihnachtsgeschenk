@@ -319,3 +319,48 @@ export function findExercise(exId) {
   }
   return null;
 }
+
+// ---------- Seitenbilder (für „Originalseite anzeigen“) ----------
+// Auf claude.ai im Dateispeicher der App (auf allen Geräten), sonst lokal im Browser.
+
+let assetsNs = null;
+
+export async function initAssets() {
+  if (!window.claude || typeof window.claude.use !== 'function') return;
+  try {
+    assetsNs = await window.claude.use('assets');
+  } catch {
+    assetsNs = null;
+  }
+}
+
+export async function savePageImage(unitId, label, blob) {
+  if (assetsNs) {
+    try {
+      const r = await assetsNs.upload(blob);
+      return { asset: r.id };
+    } catch {
+      // dann eben lokal
+    }
+  }
+  const key = `page:${unitId}:${label}`;
+  await kvSet(key, blob);
+  return { idb: key };
+}
+
+export async function pageImageUrl(ref) {
+  if (!ref) return null;
+  if (ref.asset) return '/_blob/' + ref.asset;
+  if (ref.idb) {
+    const blob = await kvGet(ref.idb);
+    return blob ? URL.createObjectURL(blob) : null;
+  }
+  return null;
+}
+
+export function deletePageImages(unit) {
+  for (const ref of Object.values((unit && unit.pages) || {})) {
+    if (ref.asset && assetsNs) assetsNs.delete(ref.asset).catch(() => {});
+    if (ref.idb) kvDel(ref.idb);
+  }
+}

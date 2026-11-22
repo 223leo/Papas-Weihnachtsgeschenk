@@ -1,7 +1,8 @@
 // Spaced Repetition (vereinfachtes SM-2): Was du schwer fandest, kommt früher wieder.
 import { state, dayKey, addDays, findExercise } from './store.js';
 
-export function recordAnswer(exId, correct) {
+// examDay: Klausurtag des Kurses ('YYYY-MM-DD'). Dann kommt jede Aufgabe spätestens am Tag davor nochmal.
+export function recordAnswer(exId, correct, examDay = null) {
   const today = dayKey();
   const card = state.srs[exId] || { ease: 2.5, interval: 0, reps: 0, lapses: 0, due: today, last: null };
   if (correct) {
@@ -18,6 +19,10 @@ export function recordAnswer(exId, correct) {
   }
   card.interval = Math.min(card.interval, 180);
   card.due = addDays(today, card.interval);
+  if (examDay && examDay > today) {
+    const lastBefore = addDays(examDay, -1);
+    if (card.due > lastBefore) card.due = lastBefore > today ? lastBefore : addDays(today, 1);
+  }
   card.last = today;
   state.srs[exId] = card;
 }
