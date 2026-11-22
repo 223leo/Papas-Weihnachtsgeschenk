@@ -663,7 +663,10 @@ function renderUpload(preselect) {
   const hasKey = !!aiMode();
   const options = state.courses.map((c) => `<option value="${c.id}" ${c.id === preselect ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
   let body = `<h1>Vorlesung hochladen</h1>`;
-  if (!hasKey) {
+  if (!hasKey && window.claude) {
+    body += `<section class="card hint-card"><b>⚠️ Claude ist gerade nicht verbunden</b>
+      <p class="small">Die App konnte Claude über dein Konto nicht erreichen. Lade die Seite neu. Wenn es dann immer noch nicht geht, schick mir diese Meldung. [Code: no_sample]</p></section>`;
+  } else if (!hasKey) {
     body += `<section class="card hint-card">
       <b>🔑 API-Schlüssel nötig</b>
       <p class="small">Damit die KI aus deinen Dateien Lektionen erstellen kann, brauchst du einen Claude-API-Schlüssel.</p>
@@ -778,7 +781,7 @@ async function processUpload(courseId, files) {
   try {
     sources = await extractFiles(files, { ...extractOptions(), onStatus: (s) => render(s) });
   } catch (err) {
-    log.push({ kind: 'err', text: '⚠️ ' + esc(err.message) });
+    log.push({ kind: 'err', text: '⚠️ Datei lesen: ' + esc((err && err.message) || String(err)) + (err && err.name && err.name !== 'Error' ? ` [${esc(err.name)}]` : '') });
     render('', true);
     return;
   }

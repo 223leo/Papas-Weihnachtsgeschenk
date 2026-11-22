@@ -52,7 +52,8 @@ const SAMPLE_ERRORS = {
 };
 
 function sampleError(e) {
-  const err = new Error((e && SAMPLE_ERRORS[e.code]) || (e && e.message) || 'Unbekannter Fehler mit Claude.');
+  const base = (e && SAMPLE_ERRORS[e.code]) || (e && e.message) || 'Unbekannter Fehler mit Claude.';
+  const err = new Error(`${base} [Code: ${(e && e.code) || 'unbekannt'}${e && e.message && SAMPLE_ERRORS[e.code] ? ' – ' + String(e.message).slice(0, 160) : ''}]`);
   err.fatal = e && ['not_granted', 'sampling_disabled', 'rate_limited', 'session_expired'].includes(e.code);
   return err;
 }
