@@ -23,38 +23,40 @@ Lade deine Vorlesungsunterlagen hoch, und eine KI macht daraus kurze Lektionen i
 
 ## Starten
 
-1. Die App ist eine reine Web-App ohne Server. Lokal startest du sie zum Beispiel so:
+### Variante A: direkt auf claude.ai (am einfachsten)
+
+Die App läuft als Seite auf claude.ai. Dort nutzt sie **dein Claude-Konto**: Du brauchst keinen API-Schlüssel, und jede erstellte Lektion zählt zu deinem normalen Nutzungslimit. Beim ersten Hochladen fragt claude.ai, ob die App Claude nutzen darf.
+
+Deine Kurse und Fortschritte liegen dort in deinem privaten Speicher. Nur du kannst sie sehen, auch wenn du den Link teilst, und du hast sie auf jedem Gerät, auf dem du bei claude.ai angemeldet bist.
+
+### Variante B: als eigene Web-App (mit API-Schlüssel)
+
+1. Lokal starten:
    ```bash
    cd lernapp
    python3 -m http.server 8000
    ```
-   Dann öffnest du http://localhost:8000.
-2. Kostenlos online stellen geht mit **GitHub Pages**: Im Repository unter *Settings → Pages* den Branch auswählen. Die App liegt dann unter `…github.io/<repo>/lernapp/`.
-3. Am Handy: Seite öffnen und *„Zum Home-Bildschirm hinzufügen“* wählen. Dann startet sie wie eine App und funktioniert beim Üben auch offline.
+   Dann http://localhost:8000 öffnen. (Ein Doppelklick auf `index.html` reicht nicht.)
+2. Oder kostenlos online mit **GitHub Pages**: Im Repository unter *Settings → Pages* den Branch auswählen. Die App liegt dann unter `…github.io/<repo>/lernapp/`.
+3. Am Handy: Seite öffnen und *„Zum Home-Bildschirm hinzufügen“* wählen.
+4. KI einrichten: Auf https://platform.claude.com ein Konto anlegen, Guthaben aufladen, einen API-Schlüssel erstellen und ihn in der App unter **Einstellungen → KI** eintragen. Der Schlüssel bleibt auf deinem Gerät.
 
-## KI einrichten
-
-1. Konto anlegen auf https://platform.claude.com, etwas Guthaben aufladen und einen API-Schlüssel erstellen.
-2. In der App unter **Einstellungen → KI** den Schlüssel eintragen und „Verbindung testen“ drücken.
-
-Der Schlüssel wird nur auf deinem Gerät gespeichert und nur an Anthropic gesendet. Als Modell ist Claude Opus 5.5 voreingestellt. Sonnet 5.5 und Haiku 5.5 sind schneller und günstiger.
-
-Ohne Schlüssel kannst du den **Demo-Kurs** ausprobieren. Freie Antworten bewertest du dann selbst.
+Ohne KI kannst du den **Demo-Kurs** ausprobieren. Freie Antworten bewertest du dann selbst. Das geht auf Wunsch auch mit KI: *Einstellungen → Freie Antworten bewerten*.
 
 ## Daten
 
-Alles bleibt lokal im Browser (IndexedDB). Unter *Einstellungen → Daten* kannst du eine Sicherung herunterladen und wieder laden, zum Beispiel für einen Gerätewechsel.
+In Variante A liegen die Daten in deinem privaten Speicher auf claude.ai, in Variante B lokal im Browser (IndexedDB). Unter *Einstellungen → Daten* kannst du eine Sicherung herunterladen und wieder laden, zum Beispiel für einen Gerätewechsel.
 
 ## Aufbau
 
 | Datei | Inhalt |
 |---|---|
 | `js/app.js` | Oberfläche: Lernpfad, Lektions-Player, Upload, Profil, Einstellungen |
-| `js/ai.js` | Claude API: Lektionen erzeugen, freie Antworten bewerten |
+| `js/ai.js` | KI: über dein Claude-Konto oder die Claude API; Lektionen erzeugen, freie Antworten bewerten |
 | `js/extract.js` | Text aus PDF/PPTX/DOCX lesen, Bilder vorbereiten, in Abschnitte teilen |
 | `js/srs.js` | Spaced Repetition (vereinfachtes SM-2) |
 | `js/gamification.js` | XP, Level, Streak, Serienschutz, Erfolge |
-| `js/store.js` | Speicher (IndexedDB) und Datenmodell |
+| `js/store.js` | Speicher (claude.ai-Cloud oder IndexedDB) und Datenmodell |
 | `js/demo.js` | Demo-Kurs |
 | `sw.js` | Offline-Unterstützung |
 

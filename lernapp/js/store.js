@@ -105,39 +105,153 @@ function defaultState() {
 
 export let state = defaultState();
 
-export async function loadState() {
-  const saved = await kvGet('state');
-  if (saved && typeof saved === 'object') {
-    const base = defaultState();
-    state = {
-      ...base,
-      ...saved,
-      stats: { ...base.stats, ...(saved.stats || {}) },
-      settings: { ...base.settings, ...(saved.settings || {}) },
-    };
+function withDefaults(saved) {
+  const base = defaultState();
+  return {
+    ...base,
+    ...saved,
+    stats: { ...base.stats, ...(saved.stats || {}) },
+    settings: { ...base.settings, ...(saved.settings || {}) },
+  };
+}
+
+// ---------- Cloud-Speicher, wenn die App auf claude.ai läuft ----------
+// Dann liegen die Daten in deinem privaten Bereich (data/users/<deine-id>),
+// den niemand sonst lesen kann. Sonst: nur lokal im Browser.
+
+let remote = null; // { coll }
+const written = new Map(); // Dokument-ID -> zuletzt gespeicherter JSON-Text
+let errorHandler = () => {};
+const DOC_LIMIT = 180000; // Zeichen pro Dokument (Plattform-Grenze: 256 KiB)
+
+export function onStorageError(fn) {
+  errorHandler = fn;
+}
+
+export function storageMode() {
+  return remote ? 'cloud' : 'local';
+}
+
+function withTimeout(promise, ms) {
+  return Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ms))]);
+}
+
+async function connectRemote() {
+  if (!window.claude || typeof window.claude.use !== 'function') return null;
+  try {
+    const [db, user] = await Promise.all([window.claude.use('db'), window.claude.use('user')]);
+    if (!db || !user) return null;
+    const id = await user.id();
+    if (!id) return null;
+    return { coll: db.collection('data/users/' + id) };
+  } catch {
+    return null;
   }
+}
+
+// Lektionen werden pro Abschnitt gespeichert, große Abschnitte in mehreren Teilen
+function docsFromState() {
+  const { lessons, ...rest } = state;
+  const docs = { state: rest };
+  for (const u of state.units) {
+    const list = lessons.filter((l) => l.unitId === u.id);
+    let part = [];
+    let size = 0;
+    let n = 0;
+    const flush = () => {
+      docs[`u_${u.id}_${n++}`] = { unitId: u.id, lessons: part };
+      part = [];
+      size = 0;
+    };
+    for (const l of list) {
+      const len = JSON.stringify(l).length;
+      if (part.length && size + len > DOC_LIMIT) flush();
+      part.push(l);
+      size += len;
+    }
+    if (part.length || n === 0) flush();
+  }
+  return docs;
+}
+
+let chain = Promise.resolve();
+function pushRemote() {
+  const docs = docsFromState();
+  const jobs = [];
+  for (const [id, value] of Object.entries(docs)) {
+    const json = JSON.stringify(value);
+    if (written.get(id) !== json) jobs.push({ id, json });
+  }
+  for (const id of written.keys()) if (!(id in docs)) jobs.push({ id, del: true });
+  if (!jobs.length) return chain;
+  chain = chain.then(async () => {
+    for (const job of jobs) {
+      try {
+        if (job.del) {
+          await remote.coll.doc(job.id).delete();
+          written.delete(job.id);
+        } else {
+          await remote.coll.doc(job.id).set(JSON.parse(job.json));
+          written.set(job.id, job.json);
+        }
+      } catch (e) {
+        errorHandler(
+          e && e.code === 'quota_exceeded'
+            ? 'Der Cloud-Speicher ist voll. Lösche alte Kurse, um Platz zu schaffen.'
+            : 'Speichern in der Cloud hat nicht geklappt. Deine Daten bleiben vorerst auf diesem Gerät.',
+        );
+      }
+    }
+  });
+  return chain;
+}
+
+export async function loadState() {
+  const local = await kvGet('state');
+  let saved = local;
+  remote = await connectRemote();
+  if (remote) {
+    try {
+      const snap = await withTimeout(remote.coll.limit(1000).get(), 12000);
+      const docs = {};
+      for (const d of snap.docs) docs[d.id] = d.data();
+      if (docs.state) {
+        const lessons = [];
+        for (const [id, v] of Object.entries(docs)) {
+          if (id.startsWith('u_') && v && Array.isArray(v.lessons)) lessons.push(...v.lessons);
+          written.set(id, JSON.stringify(v));
+        }
+        saved = { ...docs.state, lessons };
+      }
+    } catch {
+      remote = null;
+      setTimeout(() => errorHandler('Der Cloud-Speicher ist gerade nicht erreichbar. Gespeichert wird vorerst nur auf diesem Gerät.'), 500);
+    }
+  }
+  if (saved && typeof saved === 'object') state = withDefaults(saved);
+  // Erster Start in der Cloud mit vorhandenen lokalen Daten: hochladen
+  if (remote && !written.has('state') && local) pushRemote();
   return state;
 }
 
 let saveTimer = null;
 export function save() {
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => kvSet('state', state), 150);
+  saveTimer = setTimeout(saveNow, 600);
 }
 
-export function saveNow() {
+export async function saveNow() {
   clearTimeout(saveTimer);
-  return kvSet('state', state);
+  await kvSet('state', state);
+  if (remote) await pushRemote();
 }
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') saveNow();
+});
 
 export function replaceState(next) {
-  const base = defaultState();
-  state = {
-    ...base,
-    ...next,
-    stats: { ...base.stats, ...(next.stats || {}) },
-    settings: { ...base.settings, ...(next.settings || {}) },
-  };
+  state = withDefaults(next);
   return saveNow();
 }
 

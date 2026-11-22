@@ -1,17 +1,67 @@
-// KI-Anbindung (Claude API) direkt aus dem Browser mit deinem eigenen API-Schlüssel.
-// Der Schlüssel bleibt auf deinem Gerät und wird nur an api.anthropic.com geschickt.
+// KI-Anbindung. Zwei Wege:
+// 1. Auf claude.ai geöffnet: über dein Claude-Konto (kein API-Schlüssel nötig).
+// 2. Als normale Web-App: Claude API mit deinem eigenen Schlüssel. Der Schlüssel
+//    bleibt auf deinem Gerät und wird nur an api.anthropic.com geschickt.
 import { state, uid } from './store.js';
 
 const SDK_URL = 'https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@1.6.0/+esm';
 let sdkPromise = null;
 
+// ---------- Welcher Weg ist verfügbar? ----------
+
+let sample = null; // Claude über claude.ai
+let sampleLimits = null;
+
+export async function initAI() {
+  if (!window.claude || typeof window.claude.use !== 'function') return;
+  try {
+    sample = await window.claude.use('sample');
+    if (sample) sampleLimits = await sample.limits().catch(() => null);
+  } catch {
+    sample = null;
+  }
+}
+
+// 'claude' = über dein Claude-Konto, 'api' = eigener Schlüssel, null = keine KI
+export function aiMode() {
+  if (sample) return 'claude';
+  if (state.settings.apiKey && state.settings.apiKey.trim()) return 'api';
+  return null;
+}
+
+export function extractOptions() {
+  if (aiMode() === 'claude') {
+    const max = sampleLimits && sampleLimits.images ? sampleLimits.images.maxCount : 0;
+    return { renderScans: true, maxImages: Math.max(1, Math.min(max || 1, 8)), imagesAllowed: !!max };
+  }
+  return { renderScans: false, maxImages: 4, imagesAllowed: true };
+}
+
+const SAMPLE_ERRORS = {
+  not_granted: 'Du hast der App nicht erlaubt, Claude zu nutzen. Lade die Seite neu und erlaube es im Dialog.',
+  sampling_disabled: 'Claude ist für dein Konto hier nicht verfügbar.',
+  rate_limited: 'Dein Claude-Nutzungslimit ist gerade erreicht oder es waren zu viele Anfragen. Versuch es später nochmal.',
+  session_expired: 'Bitte melde dich bei claude.ai neu an.',
+  refused: 'Claude hat diesen Abschnitt nicht verarbeitet.',
+  prompt_too_large: 'Der Abschnitt ist zu groß für eine Anfrage.',
+  images_unavailable: 'Bilder können hier nicht an Claude geschickt werden.',
+  image_rejected: 'Ein Bild wurde nicht angenommen (Format oder Größe).',
+  invalid_json: 'Die Antwort von Claude war unvollständig. Bitte nochmal versuchen.',
+  empty_completion: 'Claude hat keine Antwort geliefert. Bitte nochmal versuchen.',
+  upstream_error: 'Verbindungsproblem mit Claude. Bitte nochmal versuchen.',
+};
+
+function sampleError(e) {
+  const err = new Error((e && SAMPLE_ERRORS[e.code]) || (e && e.message) || 'Unbekannter Fehler mit Claude.');
+  err.fatal = e && ['not_granted', 'sampling_disabled', 'rate_limited', 'session_expired'].includes(e.code);
+  return err;
+}
+
+// ---------- Weg 2: Claude API mit eigenem Schlüssel ----------
+
 async function getClient() {
   const apiKey = state.settings.apiKey.trim();
-  if (!apiKey) {
-    const err = new Error('Kein API-Schlüssel hinterlegt. Trage ihn unter Einstellungen ein.');
-    err.code = 'NO_KEY';
-    throw err;
-  }
+  if (!apiKey) throw new Error('Kein API-Schlüssel hinterlegt. Trage ihn unter Einstellungen ein.');
   sdkPromise ||= import(SDK_URL);
   const mod = await sdkPromise;
   const Anthropic = mod.default || mod.Anthropic;
@@ -20,20 +70,29 @@ async function getClient() {
 
 function friendlyError(e, mod) {
   const A = mod && (mod.default || mod.Anthropic);
-  if (A && e instanceof A.AuthenticationError) return 'Der API-Schlüssel ist ungültig. Bitte in den Einstellungen prüfen.';
-  if (A && e instanceof A.PermissionDeniedError) return 'Der API-Schlüssel hat keine Berechtigung für dieses Modell.';
-  if (A && e instanceof A.RateLimitError) return 'Zu viele Anfragen gerade. Bitte in einer Minute nochmal versuchen.';
+  const wrap = (msg, fatal) => Object.assign(new Error(msg), { fatal });
+  if (A && e instanceof A.AuthenticationError) return wrap('Der API-Schlüssel ist ungültig. Bitte in den Einstellungen prüfen.', true);
+  if (A && e instanceof A.PermissionDeniedError) return wrap('Der API-Schlüssel hat keine Berechtigung für dieses Modell.', true);
+  if (A && e instanceof A.RateLimitError) return wrap('Zu viele Anfragen gerade. Bitte in einer Minute nochmal versuchen.', true);
   if (A && e instanceof A.BadRequestError) {
     const msg = String(e.message || '');
-    if (/credit balance/i.test(msg)) return 'Dein API-Guthaben ist aufgebraucht. Lade es in der Claude Console auf.';
-    return 'Die Anfrage wurde abgelehnt: ' + msg;
+    if (/credit balance/i.test(msg)) return wrap('Dein API-Guthaben ist aufgebraucht. Lade es in der Claude Console auf.', true);
+    return wrap('Die Anfrage wurde abgelehnt: ' + msg, false);
   }
-  if (A && e instanceof A.APIConnectionError) return 'Keine Verbindung zur KI. Bist du online?';
-  return e.message || String(e);
+  if (A && e instanceof A.APIConnectionError) return wrap('Keine Verbindung zur KI. Bist du online?', true);
+  return wrap(e.message || String(e), false);
 }
 
-// Ein Aufruf mit strukturierter JSON-Ausgabe
-async function askJSON({ system, content, schema, effort = 'medium', maxTokens = 32000 }) {
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(',')[1]);
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(blob);
+  });
+}
+
+async function apiJSON({ system, content, schema, effort, maxTokens }) {
   const { client, mod } = await getClient();
   const model = state.settings.model;
   const params = {
@@ -52,7 +111,7 @@ async function askJSON({ system, content, schema, effort = 'medium', maxTokens =
   try {
     msg = await client.beta.messages.stream(params).finalMessage();
   } catch (e) {
-    throw new Error(friendlyError(e, mod));
+    throw friendlyError(e, mod);
   }
   if (msg.stop_reason === 'refusal') throw new Error('Die KI hat diesen Inhalt nicht verarbeitet. Versuche einen anderen Abschnitt.');
   if (msg.stop_reason === 'max_tokens') throw new Error('Die Antwort der KI war zu lang. Versuche eine kleinere Datei.');
@@ -61,6 +120,16 @@ async function askJSON({ system, content, schema, effort = 'medium', maxTokens =
     return JSON.parse(text);
   } catch {
     throw new Error('Die KI-Antwort konnte nicht gelesen werden. Bitte nochmal versuchen.');
+  }
+}
+
+export async function testKey() {
+  const { client, mod } = await getClient();
+  try {
+    await client.messages.create({ model: state.settings.model, max_tokens: 1024, output_config: { effort: 'low' }, messages: [{ role: 'user', content: 'Antworte nur mit: OK' }] });
+    return true;
+  } catch (e) {
+    throw friendlyError(e, mod);
   }
 }
 
@@ -104,7 +173,7 @@ const GENERATE_SCHEMA = {
   additionalProperties: false,
 };
 
-const GENERATE_SYSTEM = `Du bist Hochschuldidaktiker und erstellst aus Vorlesungsmaterial kurze Lerneinheiten im Stil einer Sprachlern-App: kleine Lektionen mit aktivem Üben.
+const GENERATE_RULES = `Du bist Hochschuldidaktiker und erstellst aus Vorlesungsmaterial kurze Lerneinheiten im Stil einer Sprachlern-App: kleine Lektionen mit aktivem Üben.
 
 Ziel: Der Studierende soll den Stoff wirklich verstehen und für die Klausur behalten.
 
@@ -123,7 +192,7 @@ Aufgabentypen und Felder (nicht benötigte Felder leer lassen: "" bzw. [] bzw. 0
 
 Für jede Aufgabe:
 - "explanation": 1–3 Sätze, WARUM die Antwort stimmt. Hilfreich für jemanden, der falsch lag.
-- "source": Fundstelle, z. B. "Folie 12" oder "Seite 4", aus den [Markierungen] im Material. Bei Bildern "Bild 2".
+- "source": Fundstelle, z. B. "Folie 12" oder "Seite 4", aus den [Markierungen] im Material. Bei Bildern "Bild 2" bzw. die genannte Seite.
 
 Regeln:
 - Verwende nur Inhalte aus dem Material. Erfinde keine Fakten.
@@ -131,37 +200,78 @@ Regeln:
 - Schreibe in der Sprache des Materials (meist Deutsch). Fachbegriffe wie im Material.
 - Formeln als einfacher Text (z. B. a^2 + b^2 = c^2).`;
 
+const JSON_FORMAT = `Antworte ausschließlich mit einem JSON-Objekt in genau dieser Form, ohne weiteren Text:
+{"unitTitle": "…", "lessons": [{"title": "…", "summary": "…", "exercises": [
+  {"type": "mc", "prompt": "…", "options": ["…","…","…","…"], "correctIndex": 2, "answer": "", "alternatives": [], "explanation": "…", "source": "Folie 3"},
+  {"type": "cloze", "prompt": "Satz mit ___ Lücke", "options": [], "correctIndex": 0, "answer": "Begriff", "alternatives": ["Synonym"], "explanation": "…", "source": "Folie 4"}
+]}]}`;
+
 function normalizeExercise(raw) {
-  const ex = { id: uid(), type: raw.type, prompt: (raw.prompt || '').trim(), explanation: (raw.explanation || '').trim(), source: (raw.source || '').trim() };
+  if (!raw || typeof raw !== 'object') return null;
+  const ex = { id: uid(), type: raw.type, prompt: String(raw.prompt || '').trim(), explanation: String(raw.explanation || '').trim(), source: String(raw.source || '').trim() };
   if (raw.type === 'mc') {
-    const opts = (raw.options || []).map((o) => String(o).trim()).filter(Boolean);
-    if (opts.length < 2 || raw.correctIndex < 0 || raw.correctIndex >= opts.length) return null;
+    const opts = (Array.isArray(raw.options) ? raw.options : []).map((o) => String(o).trim()).filter(Boolean);
+    const ci = Number(raw.correctIndex);
+    if (opts.length < 2 || !Number.isInteger(ci) || ci < 0 || ci >= opts.length) return null;
     ex.options = opts;
-    ex.correctIndex = raw.correctIndex;
+    ex.correctIndex = ci;
   } else if (raw.type === 'cloze') {
     if (!ex.prompt.includes('___') || !raw.answer) return null;
-    ex.answer = raw.answer.trim();
-    ex.alternatives = (raw.alternatives || []).map((a) => String(a).trim()).filter(Boolean);
-  } else {
+    ex.answer = String(raw.answer).trim();
+    ex.alternatives = (Array.isArray(raw.alternatives) ? raw.alternatives : []).map((a) => String(a).trim()).filter(Boolean);
+  } else if (raw.type === 'flashcard' || raw.type === 'free') {
     if (!raw.answer) return null;
-    ex.answer = raw.answer.trim();
+    ex.answer = String(raw.answer).trim();
+  } else {
+    return null;
   }
   return ex.prompt ? ex : null;
 }
 
-export async function generateLessons(part, courseName) {
-  const content = [
-    ...part.content,
-    {
-      type: 'text',
-      text: `Kurs: ${courseName}\nAbschnitt: ${part.label}\n\nErstelle aus diesem Material die Lektionen.${part.scanned ? ' Das Material ist gescannt oder fotografiert; lies auch Handschrift und Tafelbilder sorgfältig.' : ''}`,
-    },
-  ];
-  const data = await askJSON({ system: GENERATE_SYSTEM, content, schema: GENERATE_SCHEMA, effort: 'medium' });
-  const lessons = (data.lessons || [])
-    .map((l) => ({ title: l.title.trim(), summary: l.summary.trim(), exercises: l.exercises.map(normalizeExercise).filter(Boolean) }))
+function cleanResult(data) {
+  const lessons = (data && Array.isArray(data.lessons) ? data.lessons : [])
+    .map((l) => ({
+      title: String(l.title || 'Lektion').trim(),
+      summary: String(l.summary || '').trim(),
+      exercises: (Array.isArray(l.exercises) ? l.exercises : []).map(normalizeExercise).filter(Boolean),
+    }))
     .filter((l) => l.exercises.length >= 3);
-  return { unitTitle: data.unitTitle, lessons };
+  return { unitTitle: data && data.unitTitle ? String(data.unitTitle).trim() : '', lessons };
+}
+
+function partIntro(part, courseName) {
+  let t = `Kurs: ${courseName}\nAbschnitt: ${part.label}\n\n`;
+  if (part.scanned) t += 'Das Material ist gescannt oder fotografiert; lies auch Handschrift und Tafelbilder sorgfältig.\n\n';
+  if (part.imageLabels) t += `Die Bilder sind der Reihe nach: ${part.imageLabels.join(', ')}. Nutze diese Namen als Fundstelle.\n\n`;
+  return t;
+}
+
+export async function generateLessons(part, courseName, signal) {
+  const mode = aiMode();
+  if (mode === 'claude') {
+    const prompt = `${GENERATE_RULES}\n\n${JSON_FORMAT}\n\n${partIntro(part, courseName)}${part.text ? `MATERIAL:\n${part.text}\n\n` : ''}Erstelle jetzt aus diesem Material die Lektionen als JSON.`;
+    const opts = { modelTier: 'default', signal };
+    if (part.images && part.images.length) opts.images = part.images;
+    try {
+      return cleanResult(await sample.json(prompt, opts));
+    } catch (e) {
+      throw sampleError(e);
+    }
+  }
+  if (mode === 'api') {
+    const content = [];
+    if (part.text) content.push({ type: 'text', text: part.text });
+    if (part.pdfFile) content.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: await blobToBase64(part.pdfFile) } });
+    if (part.images) {
+      for (const [i, img] of part.images.entries()) {
+        content.push({ type: 'text', text: `[${part.imageLabels ? part.imageLabels[i] : `Bild ${i + 1}`}]` });
+        content.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: await blobToBase64(img) } });
+      }
+    }
+    content.push({ type: 'text', text: `${partIntro(part, courseName)}Erstelle aus diesem Material die Lektionen.` });
+    return cleanResult(await apiJSON({ system: GENERATE_RULES, content, schema: GENERATE_SCHEMA, effort: 'medium', maxTokens: 32000 }));
+  }
+  throw Object.assign(new Error('Keine KI verfügbar. Trage unter Einstellungen einen API-Schlüssel ein.'), { fatal: true });
 }
 
 // ---------- Freie Antworten bewerten ----------
@@ -178,23 +288,28 @@ const GRADE_SCHEMA = {
   additionalProperties: false,
 };
 
-const GRADE_SYSTEM = `Du bewertest die freie Antwort eines Studierenden auf eine Verständnisfrage, wie ein freundlicher Tutor.
+const GRADE_RULES = `Du bewertest die freie Antwort eines Studierenden auf eine Verständnisfrage, wie ein freundlicher Tutor.
 - Bewerte den Inhalt, nicht Rechtschreibung oder Stil. Eigene Formulierungen sind ausdrücklich erwünscht.
 - "score": 0–100. "verdict": "richtig" (Kern verstanden, ab ca. 70), "teilweise" (40–69), "falsch" (darunter).
 - "feedback": 1–3 Sätze, direkt an den Studierenden ("du"). Nenne zuerst, was gut war, dann was fehlt oder falsch ist.
 - "missing": fehlende Kernpunkte als kurze Stichworte (leer, wenn nichts fehlt).`;
 
 export async function gradeFreeAnswer(ex, userAnswer) {
-  const content = `Frage: ${ex.prompt}\n\nMusterlösung: ${ex.answer}\n\nAntwort des Studierenden: ${userAnswer}`;
-  return askJSON({ system: GRADE_SYSTEM, content, schema: GRADE_SCHEMA, effort: 'low', maxTokens: 4000 });
-}
-
-export async function testKey() {
-  const { client, mod } = await getClient();
-  try {
-    await client.messages.create({ model: state.settings.model, max_tokens: 1024, output_config: { effort: 'low' }, messages: [{ role: 'user', content: 'Antworte nur mit: OK' }] });
-    return true;
-  } catch (e) {
-    throw new Error(friendlyError(e, mod));
+  const task = `Frage: ${ex.prompt}\n\nMusterlösung: ${ex.answer}\n\nAntwort des Studierenden: ${userAnswer}`;
+  let g;
+  if (aiMode() === 'claude') {
+    try {
+      g = await sample.json(
+        `${GRADE_RULES}\n\nAntworte nur mit JSON: {"score": 80, "verdict": "richtig", "feedback": "…", "missing": ["…"]}\n\n${task}`,
+        { modelTier: 'quick' },
+      );
+    } catch (e) {
+      throw sampleError(e);
+    }
+  } else {
+    g = await apiJSON({ system: GRADE_RULES, content: task, schema: GRADE_SCHEMA, effort: 'low', maxTokens: 4000 });
   }
+  const score = Math.max(0, Math.min(100, Math.round(Number(g && g.score) || 0)));
+  const verdict = ['richtig', 'teilweise', 'falsch'].includes(g && g.verdict) ? g.verdict : score >= 70 ? 'richtig' : score >= 40 ? 'teilweise' : 'falsch';
+  return { score, verdict, feedback: String((g && g.feedback) || ''), missing: Array.isArray(g && g.missing) ? g.missing.map(String) : [] };
 }

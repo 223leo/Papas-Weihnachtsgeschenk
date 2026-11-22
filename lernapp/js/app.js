@@ -1,8 +1,8 @@
-import { state, loadState, save, saveNow, replaceState, resetState, uid, dayKey, courseLessons, COURSE_COLORS, MODELS } from './store.js';
+import { state, loadState, save, saveNow, replaceState, resetState, uid, dayKey, courseLessons, COURSE_COLORS, MODELS, onStorageError, storageMode } from './store.js';
 import { recordAnswer, dueExercises, dueCount, weakestExercises } from './srs.js';
 import { XP, addXP, levelInfo, xpToday, currentStreak, streakAtRisk, weekXP, ACHIEVEMENTS, checkAchievements } from './gamification.js';
 import { extractFiles, fileKind } from './extract.js';
-import { generateLessons, gradeFreeAnswer, testKey } from './ai.js';
+import { initAI, aiMode, extractOptions, generateLessons, gradeFreeAnswer, testKey } from './ai.js';
 import { addDemoCourse } from './demo.js';
 
 const app = document.getElementById('app');
@@ -157,10 +157,6 @@ function nav(active) {
 }
 
 function page(active, body) {
-  if (window.LERNPFAD_PREVIEW && (active === 'upload' || active === 'settings')) {
-    body = `<section class="card hint-card"><b>👀 Das ist die Vorschau</b>
-      <p class="small">Hier kannst du den Demo-Kurs ausprobieren. KI, Hochladen und Sicherungen funktionieren nur, wenn die App normal im Browser läuft, zum Beispiel über GitHub Pages.</p></section>` + body;
-  }
   app.innerHTML = `${topbar()}<main class="page">${body}</main>${nav(active)}`;
   window.scrollTo(0, 0);
 }
@@ -495,9 +491,9 @@ async function check() {
   if (ex.type === 'free') {
     const typed = (P.typed || '').trim();
     if (!typed) return;
-    if (state.settings.freeGrading === 'self' || !state.settings.apiKey) {
+    if (state.settings.freeGrading === 'self' || !aiMode()) {
       P.phase = 'selfgrade';
-      P.gradeError = state.settings.freeGrading === 'self' ? null : 'Ohne API-Schlüssel bewertest du selbst';
+      P.gradeError = state.settings.freeGrading === 'self' ? null : 'Ohne KI bewertest du selbst';
       return renderPlay();
     }
     P.phase = 'grading';
@@ -664,7 +660,7 @@ function renderReview() {
 // ---------- Hochladen ----------
 
 function renderUpload(preselect) {
-  const hasKey = !!state.settings.apiKey;
+  const hasKey = !!aiMode();
   const options = state.courses.map((c) => `<option value="${c.id}" ${c.id === preselect ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
   let body = `<h1>Vorlesung hochladen</h1>`;
   if (!hasKey) {
@@ -673,6 +669,9 @@ function renderUpload(preselect) {
       <p class="small">Damit die KI aus deinen Dateien Lektionen erstellen kann, brauchst du einen Claude-API-Schlüssel.</p>
       <a class="btn secondary" href="#/settings">Zu den Einstellungen</a>
     </section>`;
+  }
+  if (aiMode() === 'claude') {
+    body += `<p class="small muted">✨ Claude erstellt die Lektionen über dein claude.ai-Konto. Beim ersten Mal fragt claude.ai, ob die App Claude nutzen darf. Das zählt zu deinem normalen Nutzungslimit.</p>`;
   }
   body += `<form class="card form" id="upload-form">
     <label>Kurs
@@ -777,14 +776,14 @@ async function processUpload(courseId, files) {
 
   let sources;
   try {
-    sources = await extractFiles(files, (s) => render(s));
+    sources = await extractFiles(files, { ...extractOptions(), onStatus: (s) => render(s) });
   } catch (err) {
     log.push({ kind: 'err', text: '⚠️ ' + esc(err.message) });
     render('', true);
     return;
   }
 
-  for (const src of sources) {
+  outer: for (const src of sources) {
     const unit = { id: uid(), courseId, title: src.title, sourceName: src.title, createdAt: Date.now() };
     let order = 0;
     let unitAdded = false;
@@ -805,7 +804,7 @@ async function processUpload(courseId, files) {
         saveNow();
       } catch (err) {
         log.push({ kind: 'err', text: `⚠️ ${esc(src.title)} · ${esc(part.label)}: ${esc(err.message)}` });
-        if (/API-Schlüssel|Guthaben|Verbindung/.test(err.message)) break;
+        if (err.fatal) break outer;
       }
     }
   }
@@ -906,7 +905,12 @@ function renderSettings() {
       </select>
     </label>
   </form>
-  <form class="card form" id="key-form">
+  ${
+    aiMode() === 'claude'
+      ? `<section class="card form"><h2>✨ KI</h2><p class="small muted">Die App nutzt Claude über dein claude.ai-Konto. Du brauchst keinen API-Schlüssel. Jede erstellte Lektion und jede KI-Bewertung zählt zu deinem normalen Nutzungslimit.</p></section>`
+      : ''
+  }
+  <form class="card form ${aiMode() === 'claude' ? 'hidden' : ''}" id="key-form">
     <h2>🔑 KI (Claude API)</h2>
     <p class="small muted">Den Schlüssel bekommst du in der <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener">Claude Console</a> (Konto anlegen, etwas Guthaben aufladen, „Create Key“). Er wird nur auf diesem Gerät gespeichert und nur an Anthropic gesendet.</p>
     <label>API-Schlüssel <input name="apiKey" type="password" value="${esc(st.apiKey)}" placeholder="sk-ant-…" autocomplete="off"></label>
@@ -920,7 +924,11 @@ function renderSettings() {
   </form>
   <section class="card form">
     <h2>💾 Daten</h2>
-    <p class="small muted">Alles wird lokal in diesem Browser gespeichert. Mach ab und zu eine Sicherung, besonders vor einem Gerätewechsel. (Der API-Schlüssel wird nicht mitgesichert.)</p>
+    <p class="small muted">${
+      storageMode() === 'cloud'
+        ? 'Deine Kurse und Fortschritte werden in deinem privaten Speicher auf claude.ai gesichert. Nur du kannst sie sehen, auch wenn du den Link teilst. So hast du sie auf jedem Gerät, auf dem du angemeldet bist.'
+        : 'Alles wird lokal in diesem Browser gespeichert. Mach ab und zu eine Sicherung, besonders vor einem Gerätewechsel. (Der API-Schlüssel wird nicht mitgesichert.)'
+    }</p>
     <div class="two">
       <button class="btn secondary" data-action="export">Sicherung herunterladen</button>
       <label class="btn secondary">Sicherung laden<input type="file" id="import-input" accept=".json,application/json" hidden></label>
@@ -928,7 +936,7 @@ function renderSettings() {
     ${state.courses.some((c) => c.demo) ? '' : `<button class="btn ghost" data-action="demo">Demo-Kurs hinzufügen</button>`}
     <button class="btn danger" data-action="reset">Alle Daten löschen</button>
   </section>
-  <p class="center small muted">Lernpfad · Version 1</p>`;
+  <p class="center small muted">Lernpfad · Version 1.1</p>`;
   page('settings', body);
 
   document.getElementById('settings-form').addEventListener('change', (e) => {
@@ -967,13 +975,24 @@ function renderSettings() {
   });
 }
 
-function exportData() {
+async function exportData() {
   const data = JSON.parse(JSON.stringify(state));
   data.settings.apiKey = '';
-  const blob = new Blob([JSON.stringify(data, null, 1)], { type: 'application/json' });
+  const json = JSON.stringify(data, null, 1);
+  const filename = `lernpfad-sicherung-${dayKey()}.json`;
+  const downloads = window.claude && window.claude.use ? await window.claude.use('downloads').catch(() => null) : null;
+  if (downloads) {
+    try {
+      await downloads.save({ filename, data: json });
+    } catch (e) {
+      if (e && e.code !== 'cancelled' && e.code !== 'declined') toast('Sicherung konnte nicht gespeichert werden.', 'bad');
+    }
+    return;
+  }
+  const blob = new Blob([json], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `lernpfad-sicherung-${dayKey()}.json`;
+  a.download = filename;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
@@ -1273,8 +1292,10 @@ window.addEventListener('hashchange', () => {
   if (location.hash && location.hash !== currentHash) go(location.hash, false);
 });
 
+onStorageError((msg) => toast(msg, 'bad'));
+
 (async function init() {
-  await loadState();
+  await Promise.all([loadState(), initAI()]);
   route();
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     navigator.serviceWorker.register('sw.js').catch(() => {});
