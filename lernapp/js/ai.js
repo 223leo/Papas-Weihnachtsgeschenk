@@ -289,6 +289,34 @@ export async function generateLessons(part, courseName, signal) {
   throw Object.assign(new Error('Keine KI verfügbar. Trage unter Einstellungen einen API-Schlüssel ein.'), { fatal: true });
 }
 
+// Weitere Lektionen zu einem vorhandenen Abschnitt, ohne die Datei neu hochzuladen
+export async function generateMoreLessons(unit, lessons, sourceText, courseName) {
+  const mode = aiMode();
+  if (!mode) throw Object.assign(new Error('Keine KI verfügbar. Trage unter Einstellungen einen API-Schlüssel ein.'), { fatal: true });
+  const existing = lessons
+    .map((l) => `- Lektion „${l.title}“:\n${l.exercises.map((e) => `  · ${e.prompt}${e.answer ? ` → ${e.answer}` : e.options ? ` → ${e.options[e.correctIndex]}` : ''}`).join('\n')}`)
+    .join('\n')
+    .slice(0, 40000);
+  const material = (sourceText || '').slice(0, 80000);
+  const task =
+    `Kurs: ${courseName}\nAbschnitt: ${unit.title}\n\n` +
+    `Zu diesem Abschnitt gibt es bereits diese Lektionen und Aufgaben. Wiederhole sie nicht, aber übernimm ihre Notation und Schreibweise genau (sie wurde bereits geprüft):\n${existing || '(noch keine)'}\n\n` +
+    (material
+      ? `MATERIAL (automatisch aus der Datei gelesen; Formeln können darin verstümmelt sein, richte dich bei der Notation nach den vorhandenen Aufgaben):\n${material}\n\n`
+      : 'Das Originalmaterial liegt nicht mehr vor. Vertiefe nur die Inhalte der vorhandenen Aufgaben und erfinde keine neuen Fakten.\n\n') +
+    'Erstelle 1 bis 3 NEUE Lektionen, die den Stoff vertiefen: Aspekte, die noch nicht abgefragt wurden, Anwendung, Zusammenhänge zwischen Begriffen und typische Fehler.';
+  if (mode === 'claude') {
+    let data;
+    try {
+      data = await sample.json(`${GENERATE_RULES}\n\n${JSON_FORMAT}\n\n${task}\n\nAntworte jetzt mit dem JSON.`, { modelTier: 'default', cache: false });
+    } catch (e) {
+      throw sampleError(e);
+    }
+    return cleanResult(JSON.parse(JSON.stringify(data)));
+  }
+  return cleanResult(await apiJSON({ system: GENERATE_RULES, content: task, schema: GENERATE_SCHEMA, effort: 'medium', maxTokens: 32000 }));
+}
+
 // ---------- Freie Antworten bewerten ----------
 
 const GRADE_SCHEMA = {

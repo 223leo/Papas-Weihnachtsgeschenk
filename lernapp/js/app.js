@@ -2,7 +2,7 @@ import { state, loadState, save, saveNow, replaceState, resetState, uid, dayKey,
 import { recordAnswer, dueExercises, dueCount, weakestExercises } from './srs.js';
 import { XP, addXP, levelInfo, xpToday, currentStreak, streakAtRisk, weekXP, ACHIEVEMENTS, checkAchievements } from './gamification.js';
 import { extractFiles, fileKind } from './extract.js';
-import { initAI, aiMode, extractOptions, generateLessons, gradeFreeAnswer, testKey } from './ai.js';
+import { initAI, aiMode, extractOptions, generateLessons, generateMoreLessons, gradeFreeAnswer, testKey } from './ai.js';
 import { addDemoCourse } from './demo.js';
 import { startMath } from './math.js';
 
@@ -107,15 +107,15 @@ function lesson(id) {
 function lessonStatus(courseId) {
   // Lektionen sind nacheinander freigeschaltet (wie ein Lernpfad)
   const list = courseLessons(courseId);
-  const firstOpen = list.findIndex((l) => !l.completedAt);
+  const firstOpen = list.findIndex((l) => !l.completedAt && l.exercises.length);
   return list.map((l, i) => ({
     lesson: l,
-    state: l.completedAt ? 'done' : i === firstOpen ? 'current' : state.settings.unlockAll ? 'open' : 'locked',
+    state: !l.exercises.length ? 'empty' : l.completedAt ? 'done' : i === firstOpen ? 'current' : state.settings.unlockAll || i < firstOpen ? 'open' : 'locked',
   }));
 }
 
 function courseProgress(courseId) {
-  const list = courseLessons(courseId);
+  const list = courseLessons(courseId).filter((l) => l.exercises.length);
   const done = list.filter((l) => l.completedAt).length;
   return { done, total: list.length, pct: list.length ? Math.round((done / list.length) * 100) : 0 };
 }
@@ -259,13 +259,16 @@ function renderCourse(courseId) {
   let idx = 0;
   for (const u of units) {
     const items = statuses.filter((s) => s.lesson.unitId === u.id);
-    if (!items.length) continue;
     body += `<section class="unit" style="--accent:${c.color}">
-      <div class="unit-banner"><div class="small">Abschnitt</div><div class="unit-title">${esc(u.title)}</div><div class="small">${esc(u.sourceName || '')}</div></div>
+      <div class="unit-banner">
+        <div class="grow"><div class="small">Abschnitt</div><div class="unit-title">${esc(u.title)}</div><div class="small">${esc(u.sourceName || '')}</div></div>
+        <button class="unit-more" data-action="unit-menu" data-id="${u.id}" aria-label="Abschnitt bearbeiten">⋯</button>
+      </div>
+      ${items.length ? '' : `<div class="card empty unit-empty"><p class="muted">Noch keine Lektionen in diesem Abschnitt.</p><button class="btn secondary" data-action="new-lesson" data-id="${u.id}">➕ Eigene Lektion anlegen</button></div>`}
       <div class="path">`;
     for (const s of items) {
       const off = offsets[idx % offsets.length] * 44;
-      const icon = s.state === 'done' ? '✓' : s.state === 'locked' ? '🔒' : s.state === 'current' ? '★' : '▶';
+      const icon = s.state === 'done' ? '✓' : s.state === 'locked' ? '🔒' : s.state === 'current' ? '★' : s.state === 'empty' ? '✎' : '▶';
       body += `<div class="node-wrap" style="transform:translateX(${off}px)">
         ${s.state === 'current' ? '<div class="start-bubble">START</div>' : ''}
         <button class="node ${s.state}" data-action="node" data-id="${s.lesson.id}" aria-label="${esc(s.lesson.title)}">${icon}</button>
@@ -275,8 +278,9 @@ function renderCourse(courseId) {
     }
     body += `</div></section>`;
   }
-  if (!statuses.length) body += `<section class="card empty"><p>Dieser Kurs hat noch keine Lektionen.</p></section>`;
-  body += `<a class="btn ghost full" href="#/upload/${c.id}">➕ Weitere Vorlesung zu diesem Kurs hinzufügen</a>`;
+  if (!units.length) body += `<section class="card empty"><p>Dieser Kurs hat noch keine Abschnitte.</p></section>`;
+  body += `<a class="btn ghost full" href="#/upload/${c.id}">➕ Weitere Vorlesung zu diesem Kurs hinzufügen</a>
+  <button class="btn ghost full" data-action="new-unit" data-id="${c.id}">✎ Eigenen Abschnitt ohne Datei anlegen</button>`;
   page('learn', body);
 }
 
@@ -292,7 +296,8 @@ function lessonSheet(lessonId) {
       ${l.bestAccuracy != null ? ` · Bestwert ${l.bestAccuracy}%` : ''}</p>
     <p class="small muted">${Object.entries(counts).map(([t, n]) => `${n}× ${TYPE_LABEL[t]}`).join(' · ')}</p>
     ${locked ? `<p class="hint">🔒 Schließe zuerst die vorherigen Lektionen ab.</p>` : ''}
-    <button class="btn primary big" data-action="start" data-id="${l.id}" ${locked ? 'disabled' : ''}>${l.completedAt ? 'Nochmal üben (+XP)' : 'Lektion starten'}</button>
+    ${l.exercises.length ? '' : `<p class="hint">✎ Diese Lektion hat noch keine Aufgaben. Füge unten welche hinzu.</p>`}
+    <button class="btn primary big" data-action="start" data-id="${l.id}" ${locked || !l.exercises.length ? 'disabled' : ''}>${l.completedAt ? 'Nochmal üben (+XP)' : 'Lektion starten'}</button>
     <a class="btn ghost full" href="#/edit/${l.id}" data-action="close-sheet">Aufgaben ansehen & bearbeiten</a>
   `);
 }
@@ -303,8 +308,68 @@ function courseMenu(courseId) {
     <h2>${esc(c.name)}</h2>
     <button class="btn secondary full" data-action="rename-course" data-id="${c.id}">Umbenennen</button>
     <a class="btn secondary full" href="#/upload/${c.id}" data-action="close-sheet">Vorlesung hinzufügen</a>
+    <button class="btn secondary full" data-action="new-unit" data-id="${c.id}">Eigenen Abschnitt anlegen</button>
     <button class="btn danger full" data-action="delete-course" data-id="${c.id}">Kurs löschen</button>
   `);
+}
+
+function unit(id) {
+  return state.units.find((u) => u.id === id);
+}
+
+function unitLessons(unitId) {
+  return state.lessons.filter((l) => l.unitId === unitId).sort((a, b) => a.order - b.order);
+}
+
+function unitMenu(unitId) {
+  const u = unit(unitId);
+  const others = state.courses.filter((c) => c.id !== u.courseId);
+  const n = unitLessons(u.id).length;
+  sheet(`
+    <h2>${esc(u.title)}</h2>
+    <p class="small muted">${n} Lektion${n === 1 ? '' : 'en'}${u.sourceName ? ` · ${esc(u.sourceName)}` : ''}</p>
+    <button class="btn primary full" data-action="more-lessons" data-id="${u.id}" ${aiMode() ? '' : 'disabled'}>✨ Mehr Lektionen von Claude erstellen</button>
+    ${aiMode() ? '' : '<p class="small muted">Dafür wird die KI gebraucht (siehe Einstellungen).</p>'}
+    <button class="btn secondary full" data-action="new-lesson" data-id="${u.id}">➕ Eigene Lektion anlegen</button>
+    <button class="btn secondary full" data-action="rename-unit" data-id="${u.id}">Abschnitt umbenennen</button>
+    ${others.length ? `<button class="btn secondary full" data-action="move-unit" data-id="${u.id}">In anderen Kurs verschieben</button>` : ''}
+    <button class="btn danger full" data-action="delete-unit" data-id="${u.id}">Abschnitt löschen</button>
+  `);
+}
+
+function moveUnitSheet(unitId) {
+  const u = unit(unitId);
+  sheet(`
+    <h2>„${esc(u.title)}“ verschieben nach …</h2>
+    ${state.courses
+      .filter((c) => c.id !== u.courseId)
+      .map((c) => `<button class="btn secondary full" data-action="move-unit-to" data-id="${u.id}" data-course="${c.id}">${esc(c.name)}</button>`)
+      .join('')}
+  `);
+}
+
+async function moreLessons(unitId) {
+  const u = unit(unitId);
+  const c = course(u.courseId);
+  const el = sheet(`<h2>✨ Mehr Lektionen</h2><div class="spinner"></div>
+    <p class="muted">Claude erstellt neue Lektionen zu „${esc(u.title)}“. Das dauert etwa 20–60 Sekunden.</p>`);
+  try {
+    const res = await generateMoreLessons(u, unitLessons(u.id), state.sources[u.id], c.name);
+    let order = Math.max(-1, ...unitLessons(u.id).map((l) => l.order)) + 1;
+    for (const l of res.lessons) {
+      state.lessons.push({ id: uid(), unitId: u.id, courseId: u.courseId, order: order++, title: l.title, summary: l.summary, exercises: l.exercises, completedAt: null, bestAccuracy: null, plays: 0 });
+    }
+    await saveNow();
+    closeSheet();
+    toast(res.lessons.length ? `✨ ${res.lessons.length} neue Lektion${res.lessons.length === 1 ? '' : 'en'}` : 'Claude hat keine neuen Lektionen gefunden.', res.lessons.length ? 'good' : '');
+    renderCourse(u.courseId);
+  } catch (err) {
+    if (el.isConnected) {
+      el.innerHTML = `<h2>⚠️ Das hat nicht geklappt</h2><p>${esc(err.message)}</p><button class="btn secondary big" data-action="close-sheet">Schließen</button>`;
+    } else {
+      toast(err.message, 'bad');
+    }
+  }
 }
 
 // ---------- Lektion spielen ----------
@@ -804,6 +869,7 @@ async function processUpload(courseId, files) {
           state.lessons.push({ id: uid(), unitId: unit.id, courseId, order: order++, title: l.title, summary: l.summary, exercises: l.exercises, completedAt: null, bestAccuracy: null, plays: 0 });
           created++;
         }
+        if (part.text) state.sources[unit.id] = ((state.sources[unit.id] || '') + '\n\n' + part.text).slice(0, 400000);
         log.push({ kind: 'ok', text: `✓ ${esc(src.title)} · ${esc(part.label)}: ${res.lessons.length} Lektion${res.lessons.length === 1 ? '' : 'en'}` });
         saveNow();
       } catch (err) {
@@ -1008,8 +1074,13 @@ function renderEdit(lessonId) {
   if (!l) return go('#/');
   const body = `<div class="course-head">
     <a href="#/course/${l.courseId}" class="back" aria-label="Zurück">←</a>
-    <div class="grow"><h1>${esc(l.title)}</h1><div class="muted small">${l.exercises.length} Aufgaben · Prüfe, ob die KI alles richtig verstanden hat.</div></div>
+    <div class="grow"><h1>${esc(l.title)}</h1><div class="muted small">${l.exercises.length} Aufgabe${l.exercises.length === 1 ? '' : 'n'} · Prüfe, ob alles stimmt, und ergänze eigene Aufgaben.</div></div>
   </div>
+  <div class="two edit-tools">
+    <button class="btn primary" data-action="add-ex" data-id="${l.id}">➕ Aufgabe hinzufügen</button>
+    <button class="btn secondary" data-action="rename-lesson" data-id="${l.id}">Lektion umbenennen</button>
+  </div>
+  ${l.exercises.length ? '' : '<section class="card empty"><p class="muted">Noch keine Aufgaben. Füge mit „Aufgabe hinzufügen“ die erste hinzu.</p></section>'}
   ${l.exercises
     .map(
       (ex, i) => `<section class="card ex-card">
@@ -1028,21 +1099,34 @@ function renderEdit(lessonId) {
     </section>`,
     )
     .join('')}
+  ${l.exercises.length > 2 ? `<button class="btn primary full" data-action="add-ex" data-id="${l.id}">➕ Aufgabe hinzufügen</button>` : ''}
   <button class="btn danger full" data-action="delete-lesson" data-id="${l.id}">Ganze Lektion löschen</button>`;
   page('learn', body);
 }
 
-function editExerciseSheet(lessonId, exId) {
+function addExerciseSheet(lessonId) {
+  sheet(`<h2>Welche Art von Aufgabe?</h2>
+    <button class="btn secondary full" data-action="add-ex-type" data-id="${lessonId}" data-type="mc">Auswahl (Multiple Choice)</button>
+    <button class="btn secondary full" data-action="add-ex-type" data-id="${lessonId}" data-type="cloze">Lückentext</button>
+    <button class="btn secondary full" data-action="add-ex-type" data-id="${lessonId}" data-type="flashcard">Karteikarte</button>
+    <button class="btn secondary full" data-action="add-ex-type" data-id="${lessonId}" data-type="free">Freie Antwort</button>
+    <p class="small muted">Formeln schreibst du so: <code>\\( a_n \\)</code> im Satz oder <code>\\[ \\sum_{k=1}^{n} k \\]</code> als eigene Zeile.</p>`);
+}
+
+function editExerciseSheet(lessonId, exId, newType) {
   const l = lesson(lessonId);
-  const ex = l.exercises.find((e) => e.id === exId);
-  const el = sheet(`<h2>Aufgabe bearbeiten</h2>
+  const isNew = !!newType;
+  const ex = isNew
+    ? { id: uid(), type: newType, prompt: '', options: [], correctIndex: 0, answer: '', alternatives: [], explanation: '', source: 'eigene Aufgabe' }
+    : l.exercises.find((e) => e.id === exId);
+  const el = sheet(`<h2>${isNew ? `Neue Aufgabe: ${TYPE_LABEL[ex.type]}` : 'Aufgabe bearbeiten'}</h2>
     <form class="form" id="ex-form">
       <label>${ex.type === 'flashcard' ? 'Vorderseite' : ex.type === 'cloze' ? 'Satz (Lücke als ___)' : 'Frage'}
         <textarea name="prompt" rows="3">${esc(ex.prompt)}</textarea></label>
       ${
         ex.type === 'mc'
-          ? `<label>Antworten (eine pro Zeile)<textarea name="options" rows="4">${esc(ex.options.join('\n'))}</textarea></label>
-             <label>Richtige Antwort ist Nr. <input name="correct" type="number" min="1" max="${ex.options.length}" value="${ex.correctIndex + 1}"></label>`
+          ? `<label>Antworten (eine pro Zeile)<textarea name="options" rows="4" placeholder="Richtige Antwort&#10;Falsche Antwort&#10;Falsche Antwort&#10;Falsche Antwort">${esc(ex.options.join('\n'))}</textarea></label>
+             <label>Richtige Antwort ist Nr. <input name="correct" type="number" min="1" max="10" value="${ex.correctIndex + 1}"></label>`
           : `<label>${ex.type === 'flashcard' ? 'Rückseite' : ex.type === 'free' ? 'Musterlösung' : 'Lösung'}<textarea name="answer" rows="2">${esc(ex.answer)}</textarea></label>`
       }
       ${ex.type === 'cloze' ? `<label>Auch richtig (durch Komma getrennt)<input name="alternatives" value="${esc((ex.alternatives || []).join(', '))}"></label>` : ''}
@@ -1054,7 +1138,9 @@ function editExerciseSheet(lessonId, exId) {
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
     const prompt = String(fd.get('prompt')).trim();
+    if (!prompt) return toast('Bitte eine Frage eingeben.');
     if (ex.type === 'cloze' && !prompt.includes('___')) return toast('Der Satz braucht eine Lücke: ___');
+    if (ex.type !== 'mc' && !String(fd.get('answer') || '').trim()) return toast('Bitte eine Lösung eingeben.');
     ex.prompt = prompt;
     ex.explanation = String(fd.get('explanation')).trim();
     ex.source = String(fd.get('source')).trim();
@@ -1068,6 +1154,7 @@ function editExerciseSheet(lessonId, exId) {
       ex.answer = String(fd.get('answer')).trim();
     }
     if (ex.type === 'cloze') ex.alternatives = String(fd.get('alternatives')).split(',').map((s) => s.trim()).filter(Boolean);
+    if (isNew) l.exercises.push(ex);
     save();
     closeSheet();
     renderEdit(lessonId);
@@ -1130,6 +1217,88 @@ document.addEventListener('click', async (e) => {
     }
     case 'edit-ex':
       editExerciseSheet(el.dataset.lesson, id);
+      break;
+    case 'add-ex':
+      addExerciseSheet(id);
+      break;
+    case 'add-ex-type':
+      editExerciseSheet(id, null, el.dataset.type);
+      break;
+    case 'rename-lesson': {
+      const l = lesson(id);
+      const name = await askText('Lektion umbenennen', l.title);
+      if (name && name.trim()) {
+        l.title = name.trim();
+        save();
+        renderEdit(id);
+      }
+      break;
+    }
+    case 'unit-menu':
+      unitMenu(id);
+      break;
+    case 'rename-unit': {
+      const u = unit(id);
+      const name = await askText('Abschnitt umbenennen', u.title);
+      if (name && name.trim()) {
+        u.title = name.trim();
+        save();
+        renderCourse(u.courseId);
+      }
+      break;
+    }
+    case 'delete-unit': {
+      const u = unit(id);
+      const n = unitLessons(id).length;
+      if (!(await askConfirm(`Abschnitt „${u.title}“ mit ${n} Lektion${n === 1 ? '' : 'en'} löschen? Deine XP bleiben erhalten.`, 'Löschen'))) return;
+      unitLessons(id).forEach((l) => l.exercises.forEach((x) => delete state.srs[x.id]));
+      state.lessons = state.lessons.filter((l) => l.unitId !== id);
+      state.units = state.units.filter((x) => x.id !== id);
+      delete state.sources[id];
+      await saveNow();
+      toast('Abschnitt gelöscht');
+      renderCourse(u.courseId);
+      break;
+    }
+    case 'new-unit': {
+      const name = await askText('Name des neuen Abschnitts', '');
+      if (name && name.trim()) {
+        state.units.push({ id: uid(), courseId: id, title: name.trim(), sourceName: 'Eigener Abschnitt', createdAt: Date.now() });
+        save();
+        renderCourse(id);
+      }
+      break;
+    }
+    case 'new-lesson': {
+      const u = unit(id);
+      const name = await askText('Name der neuen Lektion', '');
+      if (name && name.trim()) {
+        const order = Math.max(-1, ...unitLessons(id).map((l) => l.order)) + 1;
+        const l = { id: uid(), unitId: id, courseId: u.courseId, order, title: name.trim(), summary: 'Eigene Lektion', exercises: [], completedAt: null, bestAccuracy: null, plays: 0 };
+        state.lessons.push(l);
+        save();
+        go(`#/edit/${l.id}`);
+      }
+      break;
+    }
+    case 'move-unit':
+      moveUnitSheet(id);
+      break;
+    case 'move-unit-to': {
+      const u = unit(id);
+      const target = el.dataset.course;
+      u.courseId = target;
+      state.lessons.filter((l) => l.unitId === id).forEach((l) => (l.courseId = target));
+      // ans Ende des Zielkurses
+      state.units = [...state.units.filter((x) => x.id !== id), u];
+      await saveNow();
+      closeSheet();
+      toast(`Verschoben nach „${course(target).name}“`, 'good');
+      go(`#/course/${target}`);
+      break;
+    }
+    case 'more-lessons':
+      moreLessons(id);
       break;
     case 'delete-ex': {
       const l = lesson(el.dataset.lesson);

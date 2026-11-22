@@ -77,6 +77,7 @@ function defaultState() {
     units: [], // {id, courseId, title, sourceName, createdAt}
     lessons: [], // {id, unitId, courseId, title, summary, exercises:[], completedAt, bestAccuracy, plays}
     srs: {}, // exerciseId -> {ease, interval, reps, lapses, due, last}
+    sources: {}, // unitId -> gelesener Text des hochgeladenen Materials (für "Mehr Lektionen")
     stats: {
       xp: 0,
       xpByDay: {}, // 'YYYY-MM-DD' -> xp
@@ -112,6 +113,7 @@ function withDefaults(saved) {
     ...saved,
     stats: { ...base.stats, ...(saved.stats || {}) },
     settings: { ...base.settings, ...(saved.settings || {}) },
+    sources: { ...(saved.sources || {}) },
   };
 }
 
@@ -123,6 +125,7 @@ let remote = null; // { coll }
 const written = new Map(); // Dokument-ID -> zuletzt gespeicherter JSON-Text
 let errorHandler = () => {};
 const DOC_LIMIT = 180000; // Zeichen pro Dokument (Plattform-Grenze: 256 KiB)
+const SOURCE_CHUNK = 90000; // Zeichen Quelltext pro Dokument (Umlaute brauchen mehr Bytes)
 
 export function onStorageError(fn) {
   errorHandler = fn;
@@ -151,8 +154,15 @@ async function connectRemote() {
 
 // Lektionen werden pro Abschnitt gespeichert, große Abschnitte in mehreren Teilen
 function docsFromState() {
-  const { lessons, ...rest } = state;
+  const { lessons, sources, ...rest } = state;
   const docs = { state: rest };
+  // Quelltexte getrennt und in Stücken speichern
+  for (const [unitId, text] of Object.entries(sources || {})) {
+    if (!text || !state.units.some((u) => u.id === unitId)) continue;
+    for (let i = 0, n = 0; i < text.length; i += SOURCE_CHUNK, n++) {
+      docs[`s_${unitId}_${n}`] = { unitId, n, text: text.slice(i, i + SOURCE_CHUNK) };
+    }
+  }
   for (const u of state.units) {
     const list = lessons.filter((l) => l.unitId === u.id);
     let part = [];
@@ -218,11 +228,17 @@ export async function loadState() {
       for (const d of snap.docs) docs[d.id] = JSON.parse(JSON.stringify(d.data() || {}));
       if (docs.state) {
         const lessons = [];
+        const pieces = {};
         for (const [id, v] of Object.entries(docs)) {
           if (id.startsWith('u_') && v && Array.isArray(v.lessons)) lessons.push(...v.lessons);
+          if (id.startsWith('s_') && v && typeof v.text === 'string') (pieces[v.unitId] ||= []).push(v);
           written.set(id, JSON.stringify(v));
         }
-        saved = { ...docs.state, lessons };
+        const sources = {};
+        for (const [unitId, list] of Object.entries(pieces)) {
+          sources[unitId] = list.sort((a, b) => a.n - b.n).map((x) => x.text).join('');
+        }
+        saved = { ...docs.state, lessons, sources };
       }
     } catch {
       remote = null;

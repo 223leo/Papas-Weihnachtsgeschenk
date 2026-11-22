@@ -19,6 +19,11 @@ Lade deine Vorlesungsunterlagen hoch, und eine KI macht daraus kurze Lektionen i
 - Serienschutz: Alle 7 Tage am Stück bekommst du einen (höchstens 2). Er rettet deine Serie, wenn du einen Tag verpasst.
 - Wochenübersicht, Erfolge und eine „Wochenliga“ gegen deine eigenen XP der Vorwoche.
 
+**Eigenes Material verwalten**
+- Kurs („⋯“ oben rechts): umbenennen, Vorlesung hinzufügen, eigenen Abschnitt anlegen, löschen.
+- Abschnitt („⋯“ im Abschnitts-Banner): mehr Lektionen von Claude erstellen lassen (ohne neuen Upload), eigene Lektion anlegen, umbenennen, in einen anderen Kurs verschieben, löschen.
+- Lektion („Aufgaben ansehen & bearbeiten“): Aufgaben hinzufügen, bearbeiten und löschen, Lektion umbenennen oder löschen. Formeln schreibst du als `\( a_n \)` oder `\[ … \]`.
+
 **Dateien:** PDF, PowerPoint (.pptx), Word (.docx), Text und Fotos/Scans (die KI liest auch Handschrift). Eingescannte PDFs werden automatisch erkannt.
 
 ## Starten
