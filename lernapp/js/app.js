@@ -42,6 +42,47 @@ function closeSheet() {
   document.querySelectorAll('.sheet-backdrop').forEach((el) => el.remove());
 }
 
+// Eigene Dialoge statt Browser-Popups: schöner am Handy und funktionieren überall
+function askConfirm(message, okLabel = 'Ja', danger = true) {
+  return new Promise((resolve) => {
+    const el = sheet(`<h2>${esc(message)}</h2>
+      <div class="two">
+        <button class="btn secondary" data-answer="0">Abbrechen</button>
+        <button class="btn ${danger ? 'warn' : 'primary'}" data-answer="1">${esc(okLabel)}</button>
+      </div>`);
+    const backdrop = el.parentElement;
+    el.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-answer]');
+      if (!b) return;
+      closeSheet();
+      resolve(b.dataset.answer === '1');
+    });
+    backdrop.addEventListener('click', (e) => {
+      if (e.target === backdrop) resolve(false);
+    });
+  });
+}
+
+function askText(title, value = '') {
+  return new Promise((resolve) => {
+    const el = sheet(`<h2>${esc(title)}</h2>
+      <form class="form" id="ask-form"><input id="ask-input" value="${esc(value)}" autocomplete="off">
+      <div class="two"><button type="button" class="btn secondary" data-cancel>Abbrechen</button><button class="btn primary" type="submit">Speichern</button></div></form>`);
+    const input = el.querySelector('#ask-input');
+    input.focus();
+    input.select();
+    el.querySelector('[data-cancel]').addEventListener('click', () => {
+      closeSheet();
+      resolve(null);
+    });
+    el.querySelector('#ask-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      closeSheet();
+      resolve(input.value);
+    });
+  });
+}
+
 function shuffle(arr) {
   const a = [...arr];
   for (let i = a.length - 1; i > 0; i--) {
@@ -116,6 +157,10 @@ function nav(active) {
 }
 
 function page(active, body) {
+  if (window.LERNPFAD_PREVIEW && (active === 'upload' || active === 'settings')) {
+    body = `<section class="card hint-card"><b>👀 Das ist die Vorschau</b>
+      <p class="small">Hier kannst du den Demo-Kurs ausprobieren. KI, Hochladen und Sicherungen funktionieren nur, wenn die App normal im Browser läuft, zum Beispiel über GitHub Pages.</p></section>` + body;
+  }
   app.innerHTML = `${topbar()}<main class="page">${body}</main>${nav(active)}`;
   window.scrollTo(0, 0);
 }
@@ -878,7 +923,7 @@ function renderSettings() {
     <button class="btn danger" data-action="reset">Alle Daten löschen</button>
   </section>
   <p class="center small muted">Lernpfad · Version 1</p>`;
-  page('', body);
+  page('settings', body);
 
   document.getElementById('settings-form').addEventListener('change', (e) => {
     const fd = new FormData(e.currentTarget);
@@ -902,7 +947,7 @@ function renderSettings() {
     try {
       const data = JSON.parse(await f.text());
       if (!data || !Array.isArray(data.courses) || !Array.isArray(data.lessons)) throw new Error('Keine gültige Sicherung');
-      if (!confirm('Die aktuellen Daten werden durch die Sicherung ersetzt. Fortfahren?')) return;
+      if (!(await askConfirm('Die aktuellen Daten werden durch die Sicherung ersetzt. Fortfahren?', 'Ersetzen'))) return;
       const key = state.settings.apiKey;
       await replaceState(data);
       state.settings.apiKey = key;
@@ -1022,7 +1067,7 @@ document.addEventListener('click', async (e) => {
       break;
     case 'rename-course': {
       const c = course(id);
-      const name = prompt('Neuer Name:', c.name);
+      const name = await askText('Kurs umbenennen', c.name);
       if (name && name.trim()) {
         c.name = name.trim();
         save();
@@ -1033,7 +1078,7 @@ document.addEventListener('click', async (e) => {
     }
     case 'delete-course': {
       const c = course(id);
-      if (!confirm(`Kurs „${c.name}“ mit allen Lektionen löschen? Deine XP bleiben erhalten.`)) return;
+      if (!(await askConfirm(`Kurs „${c.name}“ mit allen Lektionen löschen? Deine XP bleiben erhalten.`, 'Löschen'))) return;
       const exIds = state.lessons.filter((l) => l.courseId === id).flatMap((l) => l.exercises.map((x) => x.id));
       exIds.forEach((x) => delete state.srs[x]);
       state.lessons = state.lessons.filter((l) => l.courseId !== id);
@@ -1046,7 +1091,7 @@ document.addEventListener('click', async (e) => {
     }
     case 'delete-lesson': {
       const l = lesson(id);
-      if (!confirm(`Lektion „${l.title}“ löschen?`)) return;
+      if (!(await askConfirm(`Lektion „${l.title}“ löschen?`, 'Löschen'))) return;
       l.exercises.forEach((x) => delete state.srs[x.id]);
       state.lessons = state.lessons.filter((x) => x.id !== id);
       saveNow();
@@ -1058,7 +1103,7 @@ document.addEventListener('click', async (e) => {
       break;
     case 'delete-ex': {
       const l = lesson(el.dataset.lesson);
-      if (!confirm('Diese Aufgabe löschen?')) return;
+      if (!(await askConfirm('Diese Aufgabe löschen?', 'Löschen'))) return;
       l.exercises = l.exercises.filter((x) => x.id !== id);
       delete state.srs[id];
       save();
@@ -1096,7 +1141,7 @@ document.addEventListener('click', async (e) => {
       showResult(false, { answerLine: `<span class="small">Musterlösung:</span> ${esc(P.queue[0].ex.answer)}` });
       break;
     case 'quit':
-      if (P && P.solved > 0 && !confirm('Lektion beenden? Dein Fortschritt in dieser Lektion geht verloren (sonst passiert nichts).')) return;
+      if (P && P.solved > 0 && !(await askConfirm('Lektion beenden? Der Fortschritt in dieser Lektion geht verloren, sonst passiert nichts.', 'Beenden'))) return;
       {
         const back = P && P.mode === 'lesson' ? `#/course/${P.courseId}` : P ? '#/review' : '#/';
         P = null;
@@ -1134,7 +1179,7 @@ document.addEventListener('click', async (e) => {
       exportData();
       break;
     case 'reset':
-      if (!confirm('Wirklich ALLE Kurse, Lektionen und Fortschritte löschen?')) return;
+      if (!(await askConfirm('Wirklich ALLE Kurse, Lektionen und Fortschritte löschen?', 'Alles löschen'))) return;
       await resetState();
       go('#/');
       break;
@@ -1143,7 +1188,7 @@ document.addEventListener('click', async (e) => {
 
 // Tastatur: 1–4 wählt Antwort, Enter prüft/weiter, Leertaste dreht Karteikarte
 document.addEventListener('keydown', (e) => {
-  if (!P || location.hash !== '#/play') return;
+  if (!P || currentHash !== '#/play') return;
   const ex = P.queue[0] && P.queue[0].ex;
   if (!ex) return;
   const inText = e.target.tagName === 'TEXTAREA';
@@ -1167,14 +1212,31 @@ document.addEventListener('keydown', (e) => {
 
 // ---------- Router ----------
 
-function go(hash) {
-  if (location.hash === hash) route();
-  else location.hash = hash;
+let currentHash = location.hash || '#/';
+
+function go(hash, push = true) {
+  currentHash = hash;
+  if (push && location.hash !== hash) {
+    try {
+      history.pushState(null, '', hash);
+    } catch {
+      // eingebettet: Adresse bleibt gleich, die App navigiert trotzdem
+    }
+  }
+  route();
 }
+
+// Interne Links abfangen, damit die Navigation auch eingebettet klappt
+document.addEventListener('click', (e) => {
+  const a = e.target.closest('a[href^="#/"]');
+  if (!a) return;
+  e.preventDefault();
+  go(a.getAttribute('href'));
+});
 
 function route() {
   closeSheet();
-  const h = location.hash.replace(/^#/, '') || '/';
+  const h = currentHash.replace(/^#/, '') || '/';
   const parts = h.split('/').filter(Boolean);
   if (parts[0] !== 'play' && P) P = null;
   switch (parts[0]) {
@@ -1199,7 +1261,10 @@ function route() {
   }
 }
 
-window.addEventListener('hashchange', route);
+window.addEventListener('popstate', () => go(location.hash || '#/', false));
+window.addEventListener('hashchange', () => {
+  if (location.hash && location.hash !== currentHash) go(location.hash, false);
+});
 
 (async function init() {
   await loadState();
