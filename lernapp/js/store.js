@@ -98,6 +98,7 @@ function defaultState() {
       model: 'claude-opus-5-5',
       dailyGoal: 30,
       unlockAll: false,
+      freeGrading: 'ai', // 'ai' = KI bewertet freie Antworten, 'self' = Selbstkontrolle
     },
   };
 }

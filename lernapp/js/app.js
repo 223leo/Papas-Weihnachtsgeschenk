@@ -495,9 +495,9 @@ async function check() {
   if (ex.type === 'free') {
     const typed = (P.typed || '').trim();
     if (!typed) return;
-    if (!state.settings.apiKey) {
+    if (state.settings.freeGrading === 'self' || !state.settings.apiKey) {
       P.phase = 'selfgrade';
-      P.gradeError = 'Ohne API-Schlüssel bewertest du selbst';
+      P.gradeError = state.settings.freeGrading === 'self' ? null : 'Ohne API-Schlüssel bewertest du selbst';
       return renderPlay();
     }
     P.phase = 'grading';
@@ -899,6 +899,12 @@ function renderSettings() {
       </select>
     </label>
     <label class="row"><input type="checkbox" name="unlockAll" ${st.unlockAll ? 'checked' : ''}> Alle Lektionen freischalten (statt nacheinander)</label>
+    <label>Freie Antworten bewerten
+      <select name="freeGrading">
+        <option value="ai" ${st.freeGrading !== 'self' ? 'selected' : ''}>KI bewertet und sagt, was fehlt</option>
+        <option value="self" ${st.freeGrading === 'self' ? 'selected' : ''}>Selbst bewerten mit Musterlösung (kostenlos)</option>
+      </select>
+    </label>
   </form>
   <form class="card form" id="key-form">
     <h2>🔑 KI (Claude API)</h2>
@@ -930,6 +936,7 @@ function renderSettings() {
     st.name = String(fd.get('name') || '').trim();
     st.dailyGoal = Number(fd.get('dailyGoal'));
     st.unlockAll = fd.get('unlockAll') === 'on';
+    st.freeGrading = fd.get('freeGrading') === 'self' ? 'self' : 'ai';
     save();
     toast('Gespeichert');
   });
