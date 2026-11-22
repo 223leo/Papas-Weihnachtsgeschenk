@@ -1,4 +1,4 @@
-# Lernpfad: Vorlesungen lernen wie mit einer Sprach-App
+# Lernio: Vorlesungen lernen wie mit einer Sprach-App
 
 Lade deine Vorlesungsunterlagen hoch, und eine KI macht daraus kurze Lektionen in einem Lernpfad. Es gibt keine Herzen und keine Leben: Fehler gehören zum Lernen dazu.
 
@@ -19,6 +19,16 @@ Lade deine Vorlesungsunterlagen hoch, und eine KI macht daraus kurze Lektionen i
 - Serienschutz: Alle 7 Tage am Stück bekommst du einen (höchstens 2). Er rettet deine Serie, wenn du einen Tag verpasst.
 - Wochenübersicht, Erfolge und eine „Wochenliga“ gegen deine eigenen XP der Vorwoche.
 
+**Klausurmodus**
+- Im Kurs auf „📅 Klausurdatum festlegen“ tippen. Lernio verteilt die offenen Lektionen auf die Tage bis zur Klausur und zeigt auf der Startseite dein Tagespensum.
+- Die letzten Tage (etwa 20 %) sind fürs Wiederholen reserviert, und jede Aufgabe kommt vor der Klausur mindestens noch einmal dran.
+
+**Originalseite ansehen**
+- Bei Aufgaben aus PDFs und Fotos ist die Fundstelle („📍 Seite 4“) antippbar und zeigt die Originalseite aus deinem Skript, mit Blättern zur vorherigen und nächsten Seite.
+
+**Schwächen-Training mit KI**
+- Unter „Wiederholen“ → „✨ Neue Übungen zu meinen Schwächen“: Claude erstellt eine Lektion, die deine Stolpersteine anders abfragt. Sie landet im Abschnitt „🎯 Schwächen-Training“.
+
 **Eigenes Material verwalten**
 - Kurs („⋯“ oben rechts): umbenennen, Vorlesung hinzufügen, eigenen Abschnitt anlegen, löschen.
 - Abschnitt („⋯“ im Abschnitts-Banner): mehr Lektionen von Claude erstellen lassen (ohne neuen Upload), eigene Lektion anlegen, umbenennen, in einen anderen Kurs verschieben, löschen.
@@ -38,11 +48,11 @@ Deine Kurse und Fortschritte liegen dort in deinem privaten Speicher. Nur du kan
 
 1. Lokal starten:
    ```bash
-   cd lernapp
+   cd lernio
    python3 -m http.server 8000
    ```
    Dann http://localhost:8000 öffnen. (Ein Doppelklick auf `index.html` reicht nicht.)
-2. Oder kostenlos online mit **GitHub Pages**: Im Repository unter *Settings → Pages* den Branch auswählen. Die App liegt dann unter `…github.io/<repo>/lernapp/`.
+2. Oder kostenlos online mit **GitHub Pages**: Im Repository unter *Settings → Pages* den Branch auswählen. Die App liegt dann unter `…github.io/<repo>/lernio/`.
 3. Am Handy: Seite öffnen und *„Zum Home-Bildschirm hinzufügen“* wählen.
 4. KI einrichten: Auf https://platform.claude.com ein Konto anlegen, Guthaben aufladen, einen API-Schlüssel erstellen und ihn in der App unter **Einstellungen → KI** eintragen. Der Schlüssel bleibt auf deinem Gerät.
 

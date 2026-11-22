@@ -1,5 +1,5 @@
 // Offline-Unterstützung: App-Dateien werden zwischengespeichert, damit du auch ohne Netz üben kannst.
-const CACHE = 'lernpfad-v2';
+const CACHE = 'lernio-v3';
 const SHELL = [
   './',
   'index.html',

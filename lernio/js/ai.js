@@ -357,3 +357,35 @@ export async function gradeFreeAnswer(ex, userAnswer) {
   const verdict = ['richtig', 'teilweise', 'falsch'].includes(g && g.verdict) ? g.verdict : score >= 70 ? 'richtig' : score >= 40 ? 'teilweise' : 'falsch';
   return { score, verdict, feedback: String((g && g.feedback) || ''), missing: Array.isArray(g && g.missing) ? g.missing.map(String) : [] };
 }
+
+// ---------- Schwächen-Training ----------
+// weak: [{ex, card}] Aufgaben, die oft falsch beantwortet wurden
+export async function generateWeaknessTraining(weak, courseName) {
+  const mode = aiMode();
+  if (!mode) throw Object.assign(new Error('Keine KI verfügbar. Trage unter Einstellungen einen API-Schlüssel ein.'), { fatal: true });
+  const list = weak
+    .map(({ ex, card }) => {
+      const solution = ex.type === 'mc' ? ex.options[ex.correctIndex] : ex.answer;
+      return `- (${card.lapses}× falsch) ${ex.prompt}\n  Lösung: ${solution}${ex.explanation ? `\n  Erklärung: ${ex.explanation}` : ''}${ex.source ? `\n  Fundstelle: ${ex.source}` : ''}`;
+    })
+    .join('\n')
+    .slice(0, 40000);
+  const task =
+    `Kurs: ${courseName}\n\nDiese Aufgaben hat der Studierende wiederholt falsch beantwortet:\n${list}\n\n` +
+    'Erstelle GENAU EINE Lektion mit 6–8 NEUEN Aufgaben, die genau diese Inhalte trainieren:\n' +
+    '- Frage dieselben Konzepte anders ab als oben (andere Formulierung, anderer Aufgabentyp, Umkehrung, Anwendung auf ein Beispiel), damit nicht nur die alte Antwort auswendig gelernt wird.\n' +
+    '- Wenn ein typisches Missverständnis erkennbar ist, baue eine Aufgabe, die genau diesen Unterschied klärt.\n' +
+    '- Bleibe streng beim Stoff der Aufgaben oben. Erfinde keine neuen Fakten. Übernimm Notation und Fundstellen.\n' +
+    '- Erklärungen besonders verständlich, Schritt für Schritt.\n' +
+    '- "title": kurz, z. B. „Training: Konvergenz“. "unitTitle": "Schwächen-Training".';
+  if (mode === 'claude') {
+    let data;
+    try {
+      data = await sample.json(`${GENERATE_RULES}\n\n${JSON_FORMAT}\n\n${task}\n\nAntworte jetzt mit dem JSON.`, { modelTier: 'default', cache: false });
+    } catch (e) {
+      throw sampleError(e);
+    }
+    return cleanResult(JSON.parse(JSON.stringify(data)));
+  }
+  return cleanResult(await apiJSON({ system: GENERATE_RULES, content: task, schema: GENERATE_SCHEMA, effort: 'medium', maxTokens: 32000 }));
+}
