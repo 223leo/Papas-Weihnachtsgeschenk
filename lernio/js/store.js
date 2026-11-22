@@ -1,6 +1,6 @@
 // Persistenz: alles bleibt lokal im Browser (IndexedDB), nichts geht an einen Server.
 
-const DB_NAME = 'lernpfad';
+const DB_NAME = 'lernpfad'; // alter interner Name, bleibt, damit gespeicherte Daten erhalten bleiben
 const STORE = 'kv';
 let dbPromise = null;
 const memory = new Map(); // Fallback, falls IndexedDB blockiert ist (z. B. privater Modus)

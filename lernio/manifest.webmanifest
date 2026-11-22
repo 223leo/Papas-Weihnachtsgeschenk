@@ -1,6 +1,6 @@
 {
-  "name": "Lernpfad – Studium",
-  "short_name": "Lernpfad",
+  "name": "Lernio – Studium",
+  "short_name": "Lernio",
   "description": "Lerne deine Vorlesungen in kurzen Lektionen.",
   "start_url": "./",
   "scope": "./",

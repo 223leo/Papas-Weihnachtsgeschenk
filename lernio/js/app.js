@@ -1006,7 +1006,7 @@ function renderSettings() {
     ${state.courses.some((c) => c.demo) ? '' : `<button class="btn ghost" data-action="demo">Demo-Kurs hinzufügen</button>`}
     <button class="btn danger" data-action="reset">Alle Daten löschen</button>
   </section>
-  <p class="center small muted">Lernpfad · Version 1.1</p>`;
+  <p class="center small muted">Lernio · Version 1.2</p>`;
   page('settings', body);
 
   document.getElementById('settings-form').addEventListener('change', (e) => {
@@ -1049,7 +1049,7 @@ async function exportData() {
   const data = JSON.parse(JSON.stringify(state));
   data.settings.apiKey = '';
   const json = JSON.stringify(data, null, 1);
-  const filename = `lernpfad-sicherung-${dayKey()}.json`;
+  const filename = `lernio-sicherung-${dayKey()}.json`;
   const downloads = window.claude && window.claude.use ? await window.claude.use('downloads').catch(() => null) : null;
   if (downloads) {
     try {

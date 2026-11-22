@@ -1,4 +1,4 @@
-# Lernpfad: Vorlesungen lernen wie mit einer Sprach-App
+# Lernio: Vorlesungen lernen wie mit einer Sprach-App
 
 Lade deine Vorlesungsunterlagen hoch, und eine KI macht daraus kurze Lektionen in einem Lernpfad. Es gibt keine Herzen und keine Leben: Fehler gehören zum Lernen dazu.
 
@@ -38,11 +38,11 @@ Deine Kurse und Fortschritte liegen dort in deinem privaten Speicher. Nur du kan
 
 1. Lokal starten:
    ```bash
-   cd lernapp
+   cd lernio
    python3 -m http.server 8000
    ```
    Dann http://localhost:8000 öffnen. (Ein Doppelklick auf `index.html` reicht nicht.)
-2. Oder kostenlos online mit **GitHub Pages**: Im Repository unter *Settings → Pages* den Branch auswählen. Die App liegt dann unter `…github.io/<repo>/lernapp/`.
+2. Oder kostenlos online mit **GitHub Pages**: Im Repository unter *Settings → Pages* den Branch auswählen. Die App liegt dann unter `…github.io/<repo>/lernio/`.
 3. Am Handy: Seite öffnen und *„Zum Home-Bildschirm hinzufügen“* wählen.
 4. KI einrichten: Auf https://platform.claude.com ein Konto anlegen, Guthaben aufladen, einen API-Schlüssel erstellen und ihn in der App unter **Einstellungen → KI** eintragen. Der Schlüssel bleibt auf deinem Gerät.
 
